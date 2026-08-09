@@ -12,8 +12,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Scanner;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Main {
 
@@ -22,8 +26,14 @@ public class Main {
 
     static ObjectMapper mapper = new ObjectMapper();
 
+    //todo zbog ovoga nema locka za write, ali mozda ce trebati, ne zaboravi
+    private static ExecutorService write= Executors.newSingleThreadExecutor();
+
+    private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     public static void main(String[] args) {
+        Scanner scanner=new Scanner(System.in);
+        args=scanner.next().split(" ");
         mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         System.out.println(System.getProperty("user.dir"));
         Map<String,String> arguments=new HashMap<>();
@@ -56,12 +66,14 @@ public class Main {
                 }
                 break;
             }
-            case "put":
-            {
-                if(lsm==null)
+            case "put": {
+                if (lsm == null)
                     throw new RuntimeException("Moras da pozoves init");
-                if(arguments.containsKey("key") && arguments.containsKey("value"))
-                    lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8),arguments.get("value").getBytes(StandardCharsets.UTF_8));
+                if (arguments.containsKey("key") && arguments.containsKey("value"))
+                {
+                    write.submit(()->lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8)));
+                    //lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8));
+                }
                 else {
                     throw new InvalidArgument();
                 }
@@ -71,8 +83,10 @@ public class Main {
             {
                 if(lsm==null)
                     throw new RuntimeException("Moras da pozoves init");
-                if(arguments.containsKey("key"))
-                    lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                if(arguments.containsKey("key")) {
+                    reader.submit(()-> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
+                    //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                }
                 else {
                     throw new InvalidArgument();
                 }
@@ -83,12 +97,16 @@ public class Main {
                 if(lsm==null)
                     throw new RuntimeException("Moras da pozoves init");
                 if(arguments.containsKey("key"))
-                    lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                {
+                    write.submit(()->lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8)));
+                    //lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                }
                 else {
                     throw new InvalidArgument();
                 }
                 break;
             }
+            //TODO uradi ovo
             case "stats":
             {
                 if(lsm==null)
@@ -96,6 +114,7 @@ public class Main {
                 System.out.println("TODO: Prints the resolved config values and “engine status: stub”");
                 break;
             }
+            //todo proveri da li close radi lepo
             case "close":
             {
                 if(lsm==null)

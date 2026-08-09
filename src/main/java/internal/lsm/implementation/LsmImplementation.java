@@ -1,18 +1,15 @@
 package internal.lsm.implementation;
 
 import internal.lsm.Config;
-import internal.lsm.Global;
 import internal.lsm.Lsm;
 import internal.lsm.RecordType;
 import internal.lsm.errors.IOFailure;
-import internal.lsm.errors.InvalidArgument;
 import internal.lsm.errors.NotFound;
 import internal.lsm.errors.StoreClosed;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +28,7 @@ public class LsmImplementation implements Lsm {
     private long sequence=1;
     private long segmentId=1;
     private Object walLock=new Object();
+    private final Object memtableListLock =new Object();
     private FileChannel channel;
     private Config config=new Config();
     private Path dataPath;
@@ -40,7 +38,7 @@ public class LsmImplementation implements Lsm {
     private int n=1;
     private boolean closed;
     private int truncated;
-
+    private boolean blockWrite;
     private final long keySize=64000;
     private final long valueSize=16777216;
     private final long lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
@@ -271,7 +269,7 @@ public class LsmImplementation implements Lsm {
 
     private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure {
         boolean write=true;
-        while(write && memtableEntry.getSize() + memtables.getLast().getSize() >= Memtable.getMaxSize())
+        while(write && memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes())
         {
             //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
             //todo moze da se napise i daje memtable.getLast().getSize() == Memtable.getMaxSize()
@@ -279,18 +277,26 @@ public class LsmImplementation implements Lsm {
                 throw new IOFailure();
 
             //todo obrisati write kao condition i generalno i >= check i ovo ako ne treba da se strogo proverava ?=
-            if(memtableEntry.getSize() + memtables.getLast().getSize() == Memtable.getMaxSize())
+            if(memtableEntry.getSize() + memtables.getLast().getSize() == config.getMemtableMaxBytes())
             {
                 memtables.getLast().put(byteArray,memtableEntry);
                 write=false;
             }
 
             //todo ovde ce ici upisivanje u SSTable
-            if(recovery)
+            if(recovery) {
                 memtables.getLast().getMemtable().clear();
+                memtables.getLast().setSize(0);
+            }
             else {
+                if (memtables.size() > config.getMaxImmutableTables()) {
+                    blockWrite = true;
+                    return;
+                }
                 memtables.getLast().setImmutable(true);
-                memtables.add(new Memtable());
+                synchronized (memtableListLock) {
+                    memtables.add(new Memtable());
+                }
             }
         }
         if(write)
@@ -303,6 +309,8 @@ public class LsmImplementation implements Lsm {
 
         if(closed)
             throw new StoreClosed();
+        if(blockWrite)
+            throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
             throw new IllegalArgumentException("Kljuc ne moze biti null");
         if(valueBytes==null)
@@ -333,12 +341,14 @@ public class LsmImplementation implements Lsm {
 
     @Override
     public byte[] get(byte[] key) {
-        //todo null checkovi ili samo try ako budes lenj
-        for(int i=memtables.size()-1;i>=0;i--)
-        {
-            MemtableEntry entry=memtables.get(i).getMemtable().get(new ByteArray(key));
-            if(entry!=null && !entry.isTombstone())
-                return entry.getValue();
+        //todo proveri da li NotFound staviti unutar synchronized ili ostaviti van
+        synchronized (memtableListLock) {
+            //todo null checkovi ili samo try ako budes lenj
+            for (int i = memtables.size() - 1; i >= 0; i--) {
+                MemtableEntry entry = memtables.get(i).getMemtable().get(new ByteArray(key));
+                if (entry != null && !entry.isTombstone())
+                    return entry.getValue();
+            }
         }
         throw new NotFound();
     }
@@ -347,6 +357,8 @@ public class LsmImplementation implements Lsm {
     public void delete(byte[] keyBytes) {
         if(closed)
             throw new StoreClosed();
+        if(blockWrite)
+            throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
             throw new IllegalArgumentException("Kljuc ne moze biti null");
         if(keyBytes.length==0)

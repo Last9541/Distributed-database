@@ -2,9 +2,10 @@ package internal.lsm.implementation;
 
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 public class Memtable {
-    private SortedMap<ByteArray,MemtableEntry>memtable=new TreeMap<>();
+    private SortedMap<ByteArray,MemtableEntry>memtable=new ConcurrentSkipListMap<>();
 
     //todo pocetni i krajni seqno se vrv mogu uzeti iz memtabele
 
@@ -12,8 +13,8 @@ public class Memtable {
 
     private boolean immutable;
 
-    //todo promeniti i videti da li ovaj atribut postoji negde vec sada se ne secam
-    private static long maxSize=999999;
+//    //todo promeniti i videti da li ovaj atribut postoji negde vec sada se ne secam
+//    private static long maxSize=999999;
 
 
     public SortedMap<ByteArray, MemtableEntry> getMemtable() {
@@ -34,12 +35,16 @@ public class Memtable {
         incrementSize(memtableEntry.getSize());
     }
 
-    public static long getMaxSize() {
-        return maxSize;
-    }
+//    public static long getMaxSize() {
+//        return maxSize;
+//    }
+//
+//    public static void setMaxSize(long maxSize) {
+//        Memtable.maxSize = maxSize;
+//    }
 
-    public static void setMaxSize(long maxSize) {
-        Memtable.maxSize = maxSize;
+    public void setSize(long size) {
+        this.size = size;
     }
 
     public long getSize() {
@@ -54,11 +59,11 @@ public class Memtable {
         this.immutable = immutable;
     }
 
-    public void incrementSize(long increment)
+    public synchronized void incrementSize(long increment)
     {
         size+=increment;
     }
-    public void decrementSize(long decrement)
+    public synchronized void decrementSize(long decrement)
     {
         size-=decrement;
     }

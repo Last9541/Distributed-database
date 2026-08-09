@@ -9,13 +9,14 @@ public class Config {
     private String compression="off";
     private String log_level="info";
     private int rollSize=67108864;
+    private int maxImmutableTables=4;
 
     public Config()
     {
 
     }
 
-    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level) {
+    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables) {
         this.dataDir = dataDir;
         this.memtableMaxBytes = memtableMaxBytes;
         this.blockSize = blockSize;
@@ -23,8 +24,16 @@ public class Config {
         this.walFsyncEveryN = walFsyncEveryN;
         this.compression = compression;
         this.log_level = log_level;
+        this.maxImmutableTables=maxImmutableTables;
     }
 
+    public int getMaxImmutableTables() {
+        return maxImmutableTables;
+    }
+
+    public void setMaxImmutableTables(int maxImmutableTables) {
+        this.maxImmutableTables = maxImmutableTables;
+    }
 
     public int getRollSize() {
         return rollSize;
