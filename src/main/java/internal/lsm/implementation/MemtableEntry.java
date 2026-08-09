@@ -8,7 +8,7 @@ public class MemtableEntry {
     private byte[] value;
     private long seqNo;
     private boolean isTombstone;
-    private long size=Long.BYTES+Byte.BYTES;
+    private long size=Long.BYTES+Byte.BYTES+32;
 
     public MemtableEntry(byte[] key, byte[] value, long seqNo, boolean isTombstone) {
         if(key!=null) {

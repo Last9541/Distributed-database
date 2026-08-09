@@ -47,6 +47,7 @@ public class LsmImplementation implements Lsm {
 
     public LsmImplementation(Config config) throws IOException {
         this.config = config;
+        memtables.add(new Memtable());
         init();
     }
 
@@ -153,6 +154,8 @@ public class LsmImplementation implements Lsm {
                                     if(keyBytesLength>keySize)
                                         throw new IOFailure();
                                     byte[] keyArray = new byte[keyBytesLength];
+                                    byte[] valueArray=null;
+                                    boolean tombstone;
                                     later.get(keyArray);
 //                                    String key = new String(keyArray, StandardCharsets.UTF_8);
 //                                    String value = null;
@@ -161,10 +164,18 @@ public class LsmImplementation implements Lsm {
                                     if(valueBytesLength>valueSize)
                                         throw new IOFailure();
                                     if (valueBytesLength > 0) {
-                                        byte[] valueArray = new byte[valueBytesLength];
+                                        valueArray = new byte[valueBytesLength];
                                         later.get(valueArray);
 //                                        value = new String(valueArray, StandardCharsets.UTF_8);
+                                        tombstone=false;
                                     }
+                                    else
+                                    {
+                                        tombstone=true;
+                                    }
+                                    //todo dodaj racunanje velicine i rolling za size sad ti se spava bolje ne diraj
+                                    //todo ovde ipak neces praviti nove instance nego ces flushovati kada se napuni pa prazniti stablo
+                                    memtableWrite(new ByteArray(keyArray),new MemtableEntry(keyArray,valueArray,sequence,tombstone),true);
                                     sequence = Math.max(sequence, newSequence);
                                 }
                                 catch (IOFailure ioFailure) {
@@ -258,6 +269,35 @@ public class LsmImplementation implements Lsm {
     }
 
 
+    private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure {
+        boolean write=true;
+        while(write && memtableEntry.getSize() + memtables.getLast().getSize() >= Memtable.getMaxSize())
+        {
+            //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
+            //todo moze da se napise i daje memtable.getLast().getSize() == Memtable.getMaxSize()
+            if(memtables.getLast().getSize()==0)
+                throw new IOFailure();
+
+            //todo obrisati write kao condition i generalno i >= check i ovo ako ne treba da se strogo proverava ?=
+            if(memtableEntry.getSize() + memtables.getLast().getSize() == Memtable.getMaxSize())
+            {
+                memtables.getLast().put(byteArray,memtableEntry);
+                write=false;
+            }
+
+            //todo ovde ce ici upisivanje u SSTable
+            if(recovery)
+                memtables.getLast().getMemtable().clear();
+            else {
+                memtables.getLast().setImmutable(true);
+                memtables.add(new Memtable());
+            }
+        }
+        if(write)
+            memtables.getLast().put(byteArray,memtableEntry);
+    }
+
+
     @Override
     public void put(byte[] keyBytes, byte[] valueBytes) {
 
@@ -285,13 +325,7 @@ public class LsmImplementation implements Lsm {
         try {
             //todo dodajemo i uslov kada predjemo na sledeci fajl
             walWrite(buffer.array());
-            MemtableEntry memtableEntry=new MemtableEntry(keyBytes,valueBytes,sequence,false);
-            ByteArray byteArray=new ByteArray(keyBytes);
-            MemtableEntry old=memtables.getLast().getMemtable().put(byteArray,memtableEntry);
-            if(old!=null)
-                memtables.getLast().decrementSize(old.getSize());
-            memtables.getLast().incrementSize(memtableEntry.getSize());
-
+            memtableWrite(new ByteArray(keyBytes),new MemtableEntry(keyBytes,valueBytes,sequence,false),false);
         } catch (IOException | IOFailure e) {
             throw new RuntimeException(e);
         }
@@ -329,12 +363,11 @@ public class LsmImplementation implements Lsm {
         try {
             //todo dodajemo i uslov kada predjemo na sledeci fajl
             walWrite(buffer.array());
-            MemtableEntry memtableEntry=new MemtableEntry(keyBytes,null,sequence,true);
-            ByteArray byteArray=new ByteArray(keyBytes);
-            MemtableEntry old=memtables.getLast().getMemtable().put(byteArray,memtableEntry);
-            if(old!=null)
-                memtables.getLast().decrementSize(old.getSize());
-            memtables.getLast().incrementSize(memtableEntry.getSize());
+            memtableWrite(new ByteArray(keyBytes),new MemtableEntry(keyBytes,null,sequence,true),false);
+//            MemtableEntry old=memtables.getLast().getMemtable().put(byteArray,memtableEntry);
+//            if(old!=null)
+//                memtables.getLast().decrementSize(old.getSize());
+//            memtables.getLast().incrementSize(memtableEntry.getSize());
         } catch (IOException | IOFailure e) {
             throw new RuntimeException(e);
         }
