@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
 
 //todo zameniti exceptione svuda za errors exceptione
@@ -28,7 +29,7 @@ public class LsmImplementation implements Lsm {
     private long sequence=1;
     private long segmentId=1;
     private Object walLock=new Object();
-    private final Object memtableListLock =new Object();
+    private final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
     private FileChannel channel;
     private Config config=new Config();
     private Path dataPath;
@@ -143,8 +144,8 @@ public class LsmImplementation implements Lsm {
                                     long newSequence=later.getLong();
                                     int keyBytesLength = later.getInt();
                                     int valueBytesLength = later.getInt();
-                                    //todo proveriti da li ovako da castujem long ili samo jedan
-                                    if(keyBytesLength<=0 || valueBytesLength<0 || (long)keyBytesLength+(long)valueBytesLength!=later.remaining())
+                                    //todo proveriti da li ovako da castujem long ili samo jedan, proveri takodje ovo za DELETE
+                                    if(keyBytesLength<=0 || valueBytesLength<0 || (long)keyBytesLength+(long)valueBytesLength!=later.remaining() || recordType==RecordType.DELETE && valueBytesLength>0)
                                     {
                                         throw new Exception();
                                     }
@@ -294,9 +295,9 @@ public class LsmImplementation implements Lsm {
                     return;
                 }
                 memtables.getLast().setImmutable(true);
-                synchronized (memtableListLock) {
+                memtableListLock.writeLock().lock();
                     memtables.add(new Memtable());
-                }
+                memtableListLock.writeLock().unlock();
             }
         }
         if(write)
@@ -341,15 +342,15 @@ public class LsmImplementation implements Lsm {
 
     @Override
     public byte[] get(byte[] key) {
-        //todo proveri da li NotFound staviti unutar synchronized ili ostaviti van
-        synchronized (memtableListLock) {
+        //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
+        memtableListLock.readLock().lock();
             //todo null checkovi ili samo try ako budes lenj
             for (int i = memtables.size() - 1; i >= 0; i--) {
                 MemtableEntry entry = memtables.get(i).getMemtable().get(new ByteArray(key));
                 if (entry != null && !entry.isTombstone())
                     return entry.getValue();
             }
-        }
+        memtableListLock.readLock().unlock();
         throw new NotFound();
     }
 

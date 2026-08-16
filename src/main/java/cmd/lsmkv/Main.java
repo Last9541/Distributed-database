@@ -33,96 +33,86 @@ public class Main {
 
     public static void main(String[] args) {
         Scanner scanner=new Scanner(System.in);
-        args=scanner.next().split(" ");
         mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         System.out.println(System.getProperty("user.dir"));
         Map<String,String> arguments=new HashMap<>();
-        if(args.length==0)
-            throw new RuntimeException("ERROR");
-        for(int i=1;i<args.length-1;i++)
-        {
-            if(args[i].startsWith("--") && !args[i+1].startsWith("--"))
-                arguments.put(args[i].replace("-",""),args[i+1]);
-        }
-        switch (args[0].toLowerCase())
-        {
-            case "init":
-            {
-                //todo videti da li raditi ovo ili dodati throws za metodu
-                try {
+        boolean flag=true;
+        while(flag) {
+            args=scanner.next().split(" +");
+            if (args.length == 0)
+                throw new RuntimeException("ERROR");
+            for (int i = 1; i < args.length - 1; i++) {
+                if (args[i].startsWith("--") && !args[i + 1].startsWith("--"))
+                    arguments.put(args[i].replace("-", ""), args[i + 1]);
+            }
+            switch (args[0].toLowerCase()) {
+                case "init": {
+                    //todo videti da li raditi ovo ili dodati throws za metodu
+                    try {
 
-                    if(!arguments.containsKey("config")) {
-                        System.out.println("Default init");
-                        lsm=new LsmImplementation();
+                        if (!arguments.containsKey("config")) {
+                            System.out.println("Default init");
+                            lsm = new LsmImplementation();
+                        } else {
+                            System.out.println("Config loaded: " + arguments.get("config"));
+                            lsm = new LsmImplementation(mapper.readValue(Path.of(arguments.get("config")).toFile(), Config.class));
+                        }
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
-                    else {
-                        System.out.println("Config loaded: " + arguments.get("config"));
-                        lsm=new LsmImplementation(mapper.readValue(Path.of(arguments.get("config")).toFile(), Config.class));
+                    break;
+                }
+                case "put": {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    if (arguments.containsKey("key") && arguments.containsKey("value")) {
+                        write.submit(() -> lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8)));
+                        //lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8));
+                    } else {
+                        throw new InvalidArgument();
                     }
-
+                    break;
                 }
-                catch (Exception e) {
-                    e.printStackTrace();
+                case "get": {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    if (arguments.containsKey("key")) {
+                        reader.submit(() -> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
+                        //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                    } else {
+                        throw new InvalidArgument();
+                    }
+                    break;
                 }
-                break;
+                case "del": {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    if (arguments.containsKey("key")) {
+                        write.submit(() -> lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8)));
+                        //lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                    } else {
+                        throw new InvalidArgument();
+                    }
+                    break;
+                }
+                //TODO uradi ovo
+                case "stats": {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    System.out.println("TODO: Prints the resolved config values and “engine status: stub”");
+                    break;
+                }
+                //todo proveri da li close radi lepo
+                case "close": {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    lsm.close();
+                    flag=false;
+                    break;
+                }
             }
-            case "put": {
-                if (lsm == null)
-                    throw new RuntimeException("Moras da pozoves init");
-                if (arguments.containsKey("key") && arguments.containsKey("value"))
-                {
-                    write.submit(()->lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8)));
-                    //lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8));
-                }
-                else {
-                    throw new InvalidArgument();
-                }
-                break;
-            }
-            case "get":
-            {
-                if(lsm==null)
-                    throw new RuntimeException("Moras da pozoves init");
-                if(arguments.containsKey("key")) {
-                    reader.submit(()-> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
-                    //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
-                }
-                else {
-                    throw new InvalidArgument();
-                }
-                break;
-            }
-            case "del":
-            {
-                if(lsm==null)
-                    throw new RuntimeException("Moras da pozoves init");
-                if(arguments.containsKey("key"))
-                {
-                    write.submit(()->lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8)));
-                    //lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8));
-                }
-                else {
-                    throw new InvalidArgument();
-                }
-                break;
-            }
-            //TODO uradi ovo
-            case "stats":
-            {
-                if(lsm==null)
-                    throw new RuntimeException("Moras da pozoves init");
-                System.out.println("TODO: Prints the resolved config values and “engine status: stub”");
-                break;
-            }
-            //todo proveri da li close radi lepo
-            case "close":
-            {
-                if(lsm==null)
-                    throw new RuntimeException("Moras da pozoves init");
-                lsm.close();
-                break;
-            }
-
+            arguments.clear();
         }
     }
 }
