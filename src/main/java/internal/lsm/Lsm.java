@@ -14,6 +14,12 @@ public interface Lsm {
         throw new NotImplemented();
     }; //todo maybe boolean instaed of void for put and delete
 
+
+    default String stats()
+    {
+        return "TODO: Prints the resolved config values and “engine status: stub”";
+    }
+
     default void close(){
         throw new NotImplemented();
     };

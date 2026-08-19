@@ -100,7 +100,7 @@ public class Main {
                 case "stats": {
                     if (lsm == null)
                         throw new RuntimeException("Moras da pozoves init");
-                    System.out.println("TODO: Prints the resolved config values and “engine status: stub”");
+                    System.out.println(lsm.stats());
                     break;
                 }
                 //todo proveri da li close radi lepo
