@@ -1,9 +1,11 @@
 package internal.lsm.implementation;
 
+import cmd.lsmkv.Main;
 import internal.lsm.Config;
 import internal.lsm.Lsm;
 import internal.lsm.RecordType;
 import internal.lsm.errors.IOFailure;
+import internal.lsm.errors.InvalidArgument;
 import internal.lsm.errors.NotFound;
 import internal.lsm.errors.StoreClosed;
 
@@ -19,7 +21,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
 
 //todo zameniti exceptione svuda za errors exceptione
-public class LsmImplementation implements Lsm {
+public class LsmImplementation extends SSTable implements Lsm {
 
 
     private List<Memtable>memtables=new ArrayList<>();
@@ -32,7 +34,6 @@ public class LsmImplementation implements Lsm {
     private final Object conditionMemtableLock=new Object();
     private final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
     private FileChannel channel;
-    private Config config=new Config();
     private Path dataPath;
     private Path walPath;
     private long size;
@@ -47,13 +48,17 @@ public class LsmImplementation implements Lsm {
     private long immutablesSize=0;
 
     public LsmImplementation(Config config) throws IOException {
-        this.config = config;
-        init();
+        //this.config = config;
+        init(config);
     }
 
+//    @Override
+//    public void loadConfig(Config config) {
+//        this.config=config;
+//    }
 
-    public LsmImplementation() throws IOException {
-        init();
+    public LsmImplementation()  {
+        //init();
     }
 
     private boolean bufferRead(ByteBuffer byteBuffer,FileChannel fileChannel) throws IOException, IOFailure {
@@ -70,15 +75,21 @@ public class LsmImplementation implements Lsm {
     private void trunc(FileChannel fileChannel,long start,Path file) throws IOException {
         fileChannel.truncate(start);
         truncated++;
-        System.out.println("truncated_segment="+file.getFileName().toString() + "truncated_to="+start);
+        System.out.println("truncated_segment="+file.getFileName().toString() + " truncated_to="+start);
     }
 
-    private void init() throws IOException {
+    public void init(Config config) throws IOException {
+        if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize)
+            throw new InvalidArgument("Premali blockSize u config");
+        closed=false;
+        this.config=config;
         memtables.add(new Memtable());
         dataPath=Path.of(config.getDataDir());
         Files.createDirectories(dataPath);
         walPath = dataPath.resolve(Path.of("wal"));
         Files.createDirectories(walPath);
+        sstPath=dataPath.resolve(Path.of("sst"));
+        Files.createDirectories(sstPath);
         long sequence=0;
         try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(walPath)) {
             List<Path> files=new ArrayList<>();
@@ -181,9 +192,7 @@ public class LsmImplementation implements Lsm {
                                 }
                                 catch (Exception e)
                                 {
-                                    fileChannel.truncate(start);
-                                    truncated++;
-                                    System.out.println("truncated_segment="+file.getFileName().toString() + "truncated_to="+start);
+                                    trunc(fileChannel,start,file);
                                     break;
                                 }
 
@@ -208,12 +217,14 @@ public class LsmImplementation implements Lsm {
     @Override
     public String stats() {
         //todo dodaj lock ovde
+        memtableListLock.readLock().lock();
         Memtable memtable=memtables.getLast();
         int activeEntries=memtable.getMemtable().size();
         long activeBytes=memtable.getSize();
         int immutablesCount=memtables.size()-1;
         long immutablesBytesTotal=immutablesSize;
         long lastSeqNo=sequence;
+        memtableListLock.readLock().unlock();
         return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
     }
 
@@ -296,6 +307,7 @@ public class LsmImplementation implements Lsm {
             }
 
             //todo ovde ce ici upisivanje u SSTable
+            Main.ssTableWriter.submit(this::ssTableWrite);
             if(recovery) {
                 memtables.getLast().getMemtable().clear();
                 memtables.getLast().setSize(0);
@@ -309,8 +321,9 @@ public class LsmImplementation implements Lsm {
                     }
                     blockWrite=false;
                 }
-                memtables.getLast().setImmutable(true);
+
                 memtableListLock.writeLock().lock();
+                    memtables.getLast().setImmutable(true);
                     //todo racunanje ne mora da bude unutar locka sa obzirom da smo sigurni da cemo imati 1 writera, al ako se to promeni onda je korisno
                     immutablesSize+=memtables.getLast().getSize();
                     memtables.add(new Memtable());
@@ -325,20 +338,22 @@ public class LsmImplementation implements Lsm {
     @Override
     public void put(byte[] keyBytes, byte[] valueBytes) {
 
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
         if(closed)
             throw new StoreClosed();
         if(blockWrite)
             throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
-            throw new IllegalArgumentException("Kljuc ne moze biti null");
+            throw new InvalidArgument("Kljuc ne moze biti null");
         if(valueBytes==null)
-            throw new IllegalArgumentException("Value za sada ne moze biti null");
+            throw new InvalidArgument("Value za sada ne moze biti null");
         if(keyBytes.length==0)
-            throw new IllegalArgumentException("Kljuc ne moze biti prazan");
+            throw new InvalidArgument("Kljuc ne moze biti prazan");
         if(keyBytes.length>keySize)
-            throw new IllegalArgumentException("Preveliki key");
+            throw new InvalidArgument("Preveliki key");
         if(valueBytes.length>valueSize)
-            throw new IllegalArgumentException("Preveliki value");
+            throw new InvalidArgument("Preveliki value");
         ByteBuffer buffer = ByteBuffer.allocate(Byte.BYTES+Long.BYTES+Integer.BYTES+Integer.BYTES+keyBytes.length+valueBytes.length);
         buffer.put(RecordType.PUT.value);
         buffer.putLong(sequence);
@@ -360,6 +375,10 @@ public class LsmImplementation implements Lsm {
 
     @Override
     public byte[] get(byte[] key) {
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(closed)
+            throw new StoreClosed();
         //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
         memtableListLock.readLock().lock();
             //todo null checkovi ili samo try ako budes lenj
@@ -379,16 +398,18 @@ public class LsmImplementation implements Lsm {
 
     @Override
     public void delete(byte[] keyBytes) {
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
         if(closed)
             throw new StoreClosed();
         if(blockWrite)
             throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
-            throw new IllegalArgumentException("Kljuc ne moze biti null");
+            throw new InvalidArgument("Kljuc ne moze biti null");
         if(keyBytes.length==0)
-            throw new IllegalArgumentException("Kljuc ne moze biti prazan");
+            throw new InvalidArgument("Kljuc ne moze biti prazan");
         if(keyBytes.length>keySize)
-            throw new IllegalArgumentException("Preveliki key");
+            throw new InvalidArgument("Preveliki key");
         ByteBuffer buffer = ByteBuffer.allocate(Byte.BYTES+Long.BYTES+Integer.BYTES+Integer.BYTES+keyBytes.length);
         buffer.put(RecordType.DELETE.value);
         buffer.putLong(sequence);
@@ -413,9 +434,11 @@ public class LsmImplementation implements Lsm {
     //todo pogledati da li ostati na try catch ili preci na throws
     @Override
     public void close() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
         try {
-            if(closed)
-                throw new StoreClosed();
             channel.force(true);
             channel.close();
             closed=true;
@@ -424,5 +447,9 @@ public class LsmImplementation implements Lsm {
         }
 
 
+    }
+
+    List<Memtable> getMemtables() {
+        return memtables;
     }
 }

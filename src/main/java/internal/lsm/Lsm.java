@@ -2,6 +2,8 @@ package internal.lsm;
 
 import internal.lsm.errors.NotImplemented;
 
+import java.io.IOException;
+
 public interface Lsm {
 
     default void put(byte[] key, byte[] value){
@@ -14,6 +16,15 @@ public interface Lsm {
         throw new NotImplemented();
     }; //todo maybe boolean instaed of void for put and delete
 
+//    default void loadConfig(Config config)
+//    {
+//        throw new NotImplemented();
+//    }
+
+    default void init(Config config) throws IOException
+    {
+        throw new NotImplemented();
+    }
 
     default String stats()
     {

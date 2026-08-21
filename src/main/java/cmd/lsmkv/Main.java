@@ -21,10 +21,14 @@ import java.util.concurrent.Executors;
 
 public class Main {
 
-    //todo vrv ce se zvati init
-    private static Lsm lsm;
+
+    public static ExecutorService ssTableWriter=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    private static Lsm lsm=new LsmImplementation();
 
     static ObjectMapper mapper = new ObjectMapper();
+
+    private static Config instance=new Config();
 
     //todo zbog ovoga nema locka za write, ali mozda ce trebati, ne zaboravi
     private static ExecutorService write= Executors.newSingleThreadExecutor();
@@ -49,15 +53,17 @@ public class Main {
                 case "init": {
                     //todo videti da li raditi ovo ili dodati throws za metodu
                     try {
-
-                        if (!arguments.containsKey("config")) {
-                            System.out.println("Default init");
-                            lsm = new LsmImplementation();
-                        } else {
+                        Config config=null;
+                        if (arguments.containsKey("config"))
+                        {
                             System.out.println("Config loaded: " + arguments.get("config"));
-                            lsm = new LsmImplementation(mapper.readValue(Path.of(arguments.get("config")).toFile(), Config.class));
+                            config=mapper.readValue(Path.of(arguments.get("config")).toFile(), Config.class);
                         }
-
+                        else {
+                            System.out.println("Default init");
+                            config=instance;
+                        }
+                        lsm.init(config);
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
