@@ -10,6 +10,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 
 public class SSTable {
@@ -26,6 +27,7 @@ public class SSTable {
 
     private void ssTableWrite(Memtable memtable)
     {
+        List<SparseIndexEntry>sparseIndex=new ArrayList<>();
         //todo ovo ako se ne secam nece raditi ali da vidim da li barem pomaze u compile time
         assert lsmImplementation!=null;
         if(!memtable.isImmutable())
@@ -33,10 +35,13 @@ public class SSTable {
         //todo proveriti da li mi trebaju sve ove permisije
         try(FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(String.format("%06d.sst.tmp", tempSegmentId))), StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)){
             //todo jednog dana ovde ce doci magic/version al me jako mrzi sada da se bakcem time, takodje i dalje fali provera toga u wal-u nemoj zaboraviti
-            long bytesSum=0;
-            long blockSize=config.getBlockSize();
+//            long bytesSum=0;
+            long blockSize=0;
             //todo posto je ovo int ima smisla da i memtable size i memtable entry size bude int
-            ByteBuffer block = ByteBuffer.allocate((int) blockSize);
+            //todo proveri da li ce ovo sa 0 da radi
+            ByteBuffer block = ByteBuffer.allocate(0);
+
+            //todo ne treba ti ovo sa blockom
             for (MemtableEntry memtableEntry : memtable.getMemtable().values()) {
                 if(blockSize<memtableEntry.getSize()) {
                     block.flip();
@@ -46,8 +51,19 @@ public class SSTable {
                     }
                     blockSize=config.getBlockSize();
                     block=ByteBuffer.allocate((int) blockSize);
+                    //todo ne vidim svrhu da pisem ovo na pocetku
+//                    block.putInt(memtableEntry.getKey().length);
+//                    block.put(memtableEntry.getKey());
+                    //todo proveri da li ovo uzimamo
+                    sparseIndex.add(new SparseIndexEntry(memtableEntry.getKey(),fileChannel.position()));
                 }
-                bytesSum+=memtableEntry.getSize();
+                    block.putInt(memtableEntry.getKey().length);
+                    block.put(memtableEntry.getKey());
+                    block.putInt(memtableEntry.getValue().length);
+                    block.put(memtableEntry.getValue());
+                    block.putLong(memtableEntry.getSeqNo());
+                    block.put(memtableEntry.isTombstone()?(byte) 1:(byte) 0);
+//                bytesSum+=memtableEntry.getSize();
             }
             //todo proveriti gde staviti ovo
             tempSegmentId++;

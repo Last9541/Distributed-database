@@ -42,6 +42,7 @@ public class LsmImplementation extends SSTable implements Lsm {
     private boolean closed;
     private int truncated;
     private boolean blockWrite;
+    //todo prebaci u config
     private final long keySize=64000;
     private final long valueSize=16777216;
     private final long lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
@@ -290,17 +291,18 @@ public class LsmImplementation extends SSTable implements Lsm {
     }
 
 
+    //todo dodaj da memtabela ne sme da predje int_max
     private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure, InterruptedException {
         boolean write=true;
-        while(write && memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes())
+        while(write && (memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE))
         {
             //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
-            //todo moze da se napise i daje memtable.getLast().getSize() == Memtable.getMaxSize()
+            //todo moze da se napise i da je  memtableEntry.getSize() >= config.getMemtableMaxBytes()
             if(memtables.getLast().getSize()==0)
                 throw new IOFailure();
 
             //todo obrisati write kao condition i generalno i >= check i ovo ako ne treba da se strogo proverava ?=
-            if(memtableEntry.getSize() + memtables.getLast().getSize() == config.getMemtableMaxBytes())
+            if(memtableEntry.getSize() + memtables.getLast().getSize() == config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE)
             {
                 memtables.getLast().put(byteArray,memtableEntry);
                 write=false;
