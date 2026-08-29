@@ -25,6 +25,62 @@ public class SSTable {
 
     protected Config config;
 
+    private final int bloomFilterSizePerKey=12;
+
+
+    private int add(long a,long b,int m)
+    {
+        return (int)((a%m + b%m)%m);
+    }
+
+    private int mul(long a,long b,int m)
+    {
+        return (int)((a%m * b%m)%m);
+    }
+
+    private int hashFun1(byte[] key,int m)
+    {
+        int hash=0;
+        for (byte b : key) {
+            hash = add(mul(hash, 26, m), b + 128, m);
+        }
+        return hash;
+    }
+
+    private int hashFun2(byte[] key,int m)
+    {
+        int hash=0;
+        for (byte b : key) {
+            hash = add(mul(hash, 27, m), b + 128, m);
+        }
+        return hash;
+    }
+
+    private void writeBloom(byte[] bloom,byte[] key,int m)
+    {
+        int fun1=hashFun1(key,m);
+        int fun2=Math.max(1,hashFun2(key,m));
+        for(int i=1;i<=3;i++)
+        {
+            int index=add(fun1,mul(i,fun2,m),m);
+            bloom[index/8]|= (byte) (1<<(index%8));
+        }
+    }
+
+    private boolean readBloom(byte[] bloom,byte[] key,int m)
+    {
+        int fun1=hashFun1(key,m);
+        int fun2=Math.max(1,hashFun2(key,m));
+        for(int i=1;i<=3;i++)
+        {
+            int index=add(fun1,mul(i,fun2,m),m);
+            if((bloom[index/8]&(byte) (1<<(index%8)))==0)
+                return false;
+        }
+        return true;
+    }
+
+
     private void ssTableWrite(Memtable memtable)
     {
         List<SparseIndexEntry>sparseIndex=new ArrayList<>();
@@ -37,16 +93,33 @@ public class SSTable {
             //todo jednog dana ovde ce doci magic/version al me jako mrzi sada da se bakcem time, takodje i dalje fali provera toga u wal-u nemoj zaboraviti
 //            long bytesSum=0;
             long blockSize=0;
+
+            int no=bloomFilterSizePerKey*memtable.getMemtable().size()/8;
+            if(bloomFilterSizePerKey*memtable.getMemtable().size()%8!=0)
+                no++;
+            byte[] bloomFilter=new byte[no];
+            for(MemtableEntry memtableEntry:memtable.getMemtable().values())
+            {
+                writeBloom(bloomFilter,memtableEntry.getKey(),bloomFilter.length*8);
+            }
+            ByteBuffer bloomBuffer=ByteBuffer.allocate(bloomFilter.length);
+            bloomBuffer.put(bloomFilter);
+            bloomBuffer.flip();
+            while(bloomBuffer.hasRemaining())
+            {
+                fileChannel.write(bloomBuffer);
+            }
+
             //todo posto je ovo int ima smisla da i memtable size i memtable entry size bude int
             //todo proveri da li ce ovo sa 0 da radi
             ByteBuffer block = ByteBuffer.allocate(0);
-
             //todo ne treba ti ovo sa blockom
             for (MemtableEntry memtableEntry : memtable.getMemtable().values()) {
                 if(blockSize<memtableEntry.getSize()) {
                     block.flip();
                     while(block.hasRemaining())
                     {
+                        //todo proveri zasto se ovde ne zuti intelij
                         fileChannel.write(block);
                     }
                     blockSize=config.getBlockSize();
@@ -64,6 +137,22 @@ public class SSTable {
                     block.putLong(memtableEntry.getSeqNo());
                     block.put(memtableEntry.isTombstone()?(byte) 1:(byte) 0);
 //                bytesSum+=memtableEntry.getSize();
+            }
+            block.flip();
+            while(block.hasRemaining())
+            {
+                fileChannel.write(block);
+            }
+            for(SparseIndexEntry sparseIndexEntry:sparseIndex)
+            {
+                ByteBuffer byteBuffer=ByteBuffer.allocate(sparseIndexEntry.getKey().length + Long.BYTES);
+                byteBuffer.put(sparseIndexEntry.getKey());
+                byteBuffer.putLong(sparseIndexEntry.getIndex());
+                byteBuffer.flip();
+                while (byteBuffer.hasRemaining())
+                {
+                    fileChannel.write(byteBuffer);
+                }
             }
             //todo proveriti gde staviti ovo
             tempSegmentId++;
