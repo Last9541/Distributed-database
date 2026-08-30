@@ -144,6 +144,14 @@ public class SSTable {
             {
                 fileChannel.write(block);
             }
+            long pos=fileChannel.position();
+            ByteBuffer size=ByteBuffer.allocate(Integer.BYTES);
+            size.putInt(sparseIndex.size());
+            size.flip();
+            while(size.hasRemaining())
+            {
+                fileChannel.write(size);
+            }
             for(SparseIndexEntry sparseIndexEntry:sparseIndex)
             {
                 ByteBuffer byteBuffer=ByteBuffer.allocate(sparseIndexEntry.getKey().length + Long.BYTES);
@@ -155,6 +163,16 @@ public class SSTable {
                     fileChannel.write(byteBuffer);
                 }
             }
+
+            ByteBuffer posBuf=ByteBuffer.allocate(Long.BYTES);
+            posBuf.putLong(pos);
+            posBuf.flip();
+            while(posBuf.hasRemaining())
+            {
+                fileChannel.write(posBuf);
+            }
+
+
             //todo proveriti gde staviti ovo
             tempSegmentId++;
             //todo ovde mora nekako i atomicno menjanje imena fajla ovo videti
