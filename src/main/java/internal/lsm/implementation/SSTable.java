@@ -102,7 +102,8 @@ public class SSTable {
             {
                 writeBloom(bloomFilter,memtableEntry.getKey(),bloomFilter.length*8);
             }
-            ByteBuffer bloomBuffer=ByteBuffer.allocate(bloomFilter.length);
+            ByteBuffer bloomBuffer=ByteBuffer.allocate(Integer.BYTES + bloomFilter.length);
+            bloomBuffer.putInt(bloomFilter.length);
             bloomBuffer.put(bloomFilter);
             bloomBuffer.flip();
             while(bloomBuffer.hasRemaining())
