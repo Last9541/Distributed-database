@@ -12,6 +12,7 @@ import internal.lsm.errors.StoreClosed;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,6 +49,7 @@ public class LsmImplementation extends SSTable implements Lsm {
     private final long valueSize=16777216;
     private final long lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
     private long immutablesSize=0;
+    private String magic="WAL1";
 
     public LsmImplementation(Config config) throws IOException {
         //this.config = config;
@@ -74,10 +76,40 @@ public class LsmImplementation extends SSTable implements Lsm {
     }
 
 
+
+    public void walDelete(long segmentId)
+    {
+        for(int i=0;i<segmentId;i++)
+        {
+            try {
+                Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i))));
+            }
+            catch (Exception e)
+            {
+                throw new IOFailure("IO Greska");
+            }
+        }
+    }
+
+
     private void trunc(FileChannel fileChannel,long start,Path file) throws IOException {
         fileChannel.truncate(start);
         truncated++;
         System.out.println("truncated_segment="+file.getFileName().toString() + " truncated_to="+start);
+    }
+
+    private void deleteSstTmp()
+    {
+        try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(sstPath)){
+            for(Path file:filesStream) {
+                String name = file.getFileName().toString();
+                if (Files.isRegularFile(file) && name.contains(".") && name.substring(name.indexOf('.')).equals(".sst.tmp")) {
+                    Files.deleteIfExists(file);
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public void init(Config config) throws IOException {
@@ -92,6 +124,8 @@ public class LsmImplementation extends SSTable implements Lsm {
         Files.createDirectories(walPath);
         sstPath=dataPath.resolve(Path.of("sst"));
         Files.createDirectories(sstPath);
+        deleteSstTmp();
+        super.loadSegmentsId();
         long sequence=0;
         try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(walPath)) {
             List<Path> files=new ArrayList<>();
@@ -103,80 +137,86 @@ public class LsmImplementation extends SSTable implements Lsm {
 
             for(Path file:files) {
                 String name = file.getFileName().toString();
-                if (Files.isRegularFile(file) && name.contains(".") && name.substring(name.indexOf('.')).equals(".wal"))
+                if (Files.isRegularFile(file) && name.contains(".") && name.substring(name.indexOf('.')).equals(".wal")) {
+
                     try {
                         segmentId = Math.max(segmentId, Long.parseLong(name.substring(0, name.indexOf('.'))));
-                        try (FileChannel fileChannel = FileChannel.open(file, StandardOpenOption.READ,StandardOpenOption.WRITE))
-                        {
+                        try (FileChannel fileChannel = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
                             ByteBuffer byteBuffer = ByteBuffer.allocate(headerSize);
-                            bufferRead(byteBuffer,fileChannel);
+                            if (!bufferRead(byteBuffer, fileChannel))
+                                throw new IOFailure("Nevalidan header");
                             //todo ovaj header mora da se validira, ne zaboravi to
-                            byte[] header=new byte[headerSize];
+                            byte[] header = new byte[headerSize];
                             byteBuffer.get(header);
-                            long size=fileChannel.size();
-                            while(fileChannel.position()<size) {
-                                long start=fileChannel.position();
+                            String mag = new String(header, 0, magic.length(), StandardCharsets.US_ASCII);
+                            if (!magic.equals(mag))
+                                throw new IOFailure("Nevalidan magic");
+                            if (header[magic.length()] != 1)
+                                throw new IOFailure("Nevalidan version");
+                            for (int i = magic.length() + 1; i < headerSize; i++) {
+                                if (header[i] != 0)
+                                    throw new IOFailure("Greska pri ucitavanju fajla");
+                            }
+                            long size = fileChannel.size();
+                            while (fileChannel.position() < size) {
+                                long start = fileChannel.position();
                                 byteBuffer = ByteBuffer.allocate(Integer.BYTES);
-                                if(!bufferRead(byteBuffer,fileChannel)) {
-                                    trunc(fileChannel,start,file);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
-                                int len=byteBuffer.getInt();
+                                int len = byteBuffer.getInt();
                                 //mora biti >= konstantama + 1 zato sto kljuc ne sme biti prazan, a ne sme biti veci od size - velicina checksuma(4B TJ integer size)
-                                if(len<Byte.BYTES+Long.BYTES+ Integer.BYTES+Integer.BYTES+Byte.BYTES || fileChannel.position()+len+Integer.BYTES>size)
-                                {
-                                    trunc(fileChannel,start,file);
+                                if (len < Byte.BYTES + Long.BYTES + Integer.BYTES + Integer.BYTES + Byte.BYTES || fileChannel.position() + len + Integer.BYTES > size) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
-                                if(len>lenSize) {
-                                    trunc(fileChannel,start,file);
+                                if (len > lenSize) {
+                                    trunc(fileChannel, start, file);
                                     throw new RuntimeException();
                                 }
                                 byteBuffer = ByteBuffer.allocate(len);
-                                if(!bufferRead(byteBuffer,fileChannel)) {
-                                    trunc(fileChannel,start,file);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
-                                byte[] content=new byte[len];
+                                byte[] content = new byte[len];
                                 byteBuffer.get(content);
-                                crc32C.update(content,0,len);
-                                int newCheckSum=(int)crc32C.getValue();
+                                crc32C.update(content, 0, len);
+                                int newCheckSum = (int) crc32C.getValue();
                                 crc32C.reset();
-                                byteBuffer=ByteBuffer.allocate(Integer.BYTES);
-                                if(!bufferRead(byteBuffer,fileChannel))
-                                {
-                                    trunc(fileChannel,start,file);
+                                byteBuffer = ByteBuffer.allocate(Integer.BYTES);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
 
-                                int checksum=byteBuffer.getInt();
-                                if(newCheckSum!=checksum)
-                                {
-                                    trunc(fileChannel,start,file);
+                                int checksum = byteBuffer.getInt();
+                                if (newCheckSum != checksum) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
                                 try {
                                     ByteBuffer later = ByteBuffer.wrap(content);
                                     RecordType recordType = RecordType.getByValue(later.get());
-                                    long newSequence=later.getLong();
+                                    long newSequence = later.getLong();
                                     int keyBytesLength = later.getInt();
                                     int valueBytesLength = later.getInt();
                                     //todo proveriti da li ovako da castujem long ili samo jedan, proveri takodje ovo za DELETE
-                                    if(keyBytesLength<=0 || valueBytesLength<0 || (long)keyBytesLength+(long)valueBytesLength!=later.remaining() || recordType==RecordType.DELETE && valueBytesLength>0)
-                                    {
+                                    if (keyBytesLength <= 0 || valueBytesLength < 0 || (long) keyBytesLength + (long) valueBytesLength != later.remaining() || recordType == RecordType.DELETE && valueBytesLength > 0) {
                                         throw new Exception();
                                     }
                                     //TODO napraviti novi exception za ovo
-                                    if(keyBytesLength>keySize)
+                                    if (keyBytesLength > keySize)
                                         throw new IOFailure();
                                     byte[] keyArray = new byte[keyBytesLength];
-                                    byte[] valueArray=null;
+                                    byte[] valueArray = null;
                                     later.get(keyArray);
 //                                    String key = new String(keyArray, StandardCharsets.UTF_8);
 //                                    String value = null;
-                                    if(valueBytesLength>later.remaining())
+                                    if (valueBytesLength > later.remaining())
                                         throw new Exception();
-                                    if(valueBytesLength>valueSize)
+                                    if (valueBytesLength > valueSize)
                                         throw new IOFailure();
                                     if (valueBytesLength > 0) {
                                         valueArray = new byte[valueBytesLength];
@@ -186,15 +226,12 @@ public class LsmImplementation extends SSTable implements Lsm {
 
                                     //todo dodaj racunanje velicine i rolling za size sad ti se spava bolje ne diraj
                                     //todo ovde ipak neces praviti nove instance nego ces flushovati kada se napuni pa prazniti stablo
-                                    memtableWrite(new ByteArray(keyArray),new MemtableEntry(keyArray,valueArray,newSequence,recordType==RecordType.DELETE),true);
+                                    memtableWrite(new ByteArray(keyArray), new MemtableEntry(keyArray, valueArray, newSequence, recordType == RecordType.DELETE), true);
                                     sequence = Math.max(sequence, newSequence);
-                                }
-                                catch (IOFailure ioFailure) {
+                                } catch (IOFailure ioFailure) {
                                     throw ioFailure;
-                                }
-                                catch (Exception e)
-                                {
-                                    trunc(fileChannel,start,file);
+                                } catch (Exception e) {
+                                    trunc(fileChannel, start, file);
                                     break;
                                 }
 
@@ -206,11 +243,10 @@ public class LsmImplementation extends SSTable implements Lsm {
 //                        catch (IOFailure e) {
 //                            throw new RuntimeException(e);
 //                        }
-                    }
-                    catch (NumberFormatException ignored)
-                    {
+                    } catch (NumberFormatException ignored) {
 
                     }
+                }
             }
             this.sequence=sequence+1;
             channelInit();
@@ -223,14 +259,19 @@ public class LsmImplementation extends SSTable implements Lsm {
     public String stats() {
         //todo dodaj lock ovde
         memtableListLock.readLock().lock();
-        Memtable memtable=memtables.getLast();
-        int activeEntries=memtable.getMemtable().size();
-        long activeBytes=memtable.getSize();
-        int immutablesCount=memtables.size()-1;
-        long immutablesBytesTotal=immutablesSize;
-        long lastSeqNo=sequence;
-        memtableListLock.readLock().unlock();
-        return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
+        try {
+            Memtable memtable = memtables.getLast();
+            int activeEntries = memtable.getMemtable().size();
+            long activeBytes = memtable.getSize();
+            int immutablesCount = memtables.size() - 1;
+            long immutablesBytesTotal = immutablesSize;
+            long lastSeqNo = sequence - 1;
+            return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
+        }
+        finally {
+            memtableListLock.readLock().unlock();
+        }
+
     }
 
     private void channelInit() throws IOException
@@ -244,7 +285,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         if(channel.size()==0)
         {
             ByteBuffer record = ByteBuffer.allocate(headerSize);
-            record.put("ABCD".getBytes());
+            record.put(magic.getBytes(StandardCharsets.US_ASCII));
             record.put((byte)1);
             record.put(new byte[3]);
             record.flip();
@@ -261,7 +302,16 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
     }
 
-    private void walWrite(byte[] bytes) throws IOException {
+    private void walWrite(byte[] keyBytes,byte[] valueBytes,byte rt) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(Byte.BYTES+Long.BYTES+Integer.BYTES+Integer.BYTES+keyBytes.length+valueBytes.length);
+        buffer.put(rt);
+        buffer.putLong(sequence);
+        buffer.putInt(keyBytes.length);
+        buffer.putInt(valueBytes.length);
+        buffer.put(keyBytes);
+        buffer.put(valueBytes);
+        byte[] bytes=buffer.array();
+
         crc32C.update(bytes,0,bytes.length);
         ByteBuffer fullRecord = ByteBuffer.allocate(Integer.BYTES+bytes.length+Integer.BYTES);
         fullRecord.putInt(bytes.length);
@@ -295,14 +345,16 @@ public class LsmImplementation extends SSTable implements Lsm {
     }
 
 
+
+
+
+
     //todo dodaj da memtabela ne sme da predje int_max
-    private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure, InterruptedException {
+    private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure, InterruptedException, IOException {
         boolean write=true;
         while(write && (memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE))
         {
-            //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
-            if(memtables.getLast().getSize()==0)
-                throw new IOFailure();
+
 
             //todo obrisati write kao condition i generalno i >= check i ovo ako ne treba da se strogo proverava ?=
             if(memtableEntry.getSize() + memtables.getLast().getSize() == config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE)
@@ -310,15 +362,40 @@ public class LsmImplementation extends SSTable implements Lsm {
                 memtables.getLast().put(byteArray,memtableEntry);
                 write=false;
             }
+            else
+            {
+                //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
+                if(memtables.getLast().getSize()==0)
+                    throw new IOFailure();
+            }
 
-            //todo ovde ce ici upisivanje u SSTable
-            Main.ssTableWriter.submit(()->ssTableWrite(new ArrayList<>(memtables)));
+
             if(recovery) {
+                Memtable copy=new Memtable(memtables.getLast());
+                long copySegmentId=segmentId;
+                Main.ssTableWriter.submit(()-> {
+                    ssTableWrite(copy, copySegmentId);
+                    walDelete(copySegmentId);
+                });
                 memtables.getLast().getMemtable().clear();
                 memtables.getLast().setSize(0);
             }
             else {
-
+                channel.force(true);
+                channel.close();
+                segmentId++;
+                channelInit();
+                memtables.getLast().setImmutable(true);
+                immutablesSize+=memtables.getLast().getSize();
+                List<Memtable>memtableCopy=new ArrayList<>(memtables);
+                long copySegmentId=segmentId;
+                Main.ssTableWriter.submit(()->
+                {
+                    ssTableWrite(memtableCopy, copySegmentId);
+                    walDelete(copySegmentId);
+                });
+                if(write)
+                    walWrite(memtableEntry.getKey(),memtableEntry.getValue(),memtableEntry.isTombstone()?RecordType.DELETE.value : RecordType.PUT.value);
                 memtableListLock.writeLock().lock();
                 try {
                     while (memtables.size() > config.getMaxImmutableTables()) {
@@ -326,9 +403,6 @@ public class LsmImplementation extends SSTable implements Lsm {
                         conditionMemtableLock.await();
                     }
                     blockWrite=false;
-                    memtables.getLast().setImmutable(true);
-                    //todo racunanje ne mora da bude unutar locka sa obzirom da smo sigurni da cemo imati 1 writera, al ako se to promeni onda je korisno
-                    immutablesSize+=memtables.getLast().getSize();
                     memtables.add(new Memtable());
                 }
                 finally {
@@ -361,18 +435,11 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Preveliki key");
         if(valueBytes.length>valueSize)
             throw new InvalidArgument("Preveliki value");
-        ByteBuffer buffer = ByteBuffer.allocate(Byte.BYTES+Long.BYTES+Integer.BYTES+Integer.BYTES+keyBytes.length+valueBytes.length);
-        buffer.put(RecordType.PUT.value);
-        buffer.putLong(sequence);
-        buffer.putInt(keyBytes.length);
-        buffer.putInt(valueBytes.length);
-        buffer.put(keyBytes);
-        buffer.put(valueBytes);
 
         //todo provera da li je ostalo dovoljno mesta u fajlu tj da li otvaramo sledeci
         try {
             //todo dodajemo i uslov kada predjemo na sledeci fajl
-            walWrite(buffer.array());
+            walWrite(keyBytes,valueBytes,RecordType.PUT.value);
             memtableWrite(new ByteArray(keyBytes),new MemtableEntry(keyBytes,valueBytes,sequence,false),false);
             sequence++;
         } catch (IOException  | InterruptedException e) {
@@ -388,18 +455,20 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new StoreClosed();
         //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
         memtableListLock.readLock().lock();
+        try {
             //todo null checkovi ili samo try ako budes lenj
             for (int i = memtables.size() - 1; i >= 0; i--) {
                 MemtableEntry entry = memtables.get(i).getMemtable().get(new ByteArray(key));
                 if (entry != null) {
-                    if(entry.isTombstone())
+                    if (entry.isTombstone())
                         break;
-                    //todo proveriti da li ovde staviti
-                    memtableListLock.readLock().unlock();
                     return entry.getValue();
                 }
             }
-        memtableListLock.readLock().unlock();
+        }
+        finally {
+            memtableListLock.readLock().unlock();
+        }
         throw new NotFound();
     }
 
@@ -417,16 +486,11 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Kljuc ne moze biti prazan");
         if(keyBytes.length>keySize)
             throw new InvalidArgument("Preveliki key");
-        ByteBuffer buffer = ByteBuffer.allocate(Byte.BYTES+Long.BYTES+Integer.BYTES+Integer.BYTES+keyBytes.length);
-        buffer.put(RecordType.DELETE.value);
-        buffer.putLong(sequence);
-        buffer.putInt(keyBytes.length);
-        buffer.putInt(0);
-        buffer.put(keyBytes);
+
         //todo provera da li je ostalo dovoljno mesta u fajlu tj da li otvaramo sledeci
         try {
             //todo dodajemo i uslov kada predjemo na sledeci fajl
-            walWrite(buffer.array());
+            walWrite(keyBytes,new byte[0],RecordType.DELETE.value);
             memtableWrite(new ByteArray(keyBytes),new MemtableEntry(keyBytes,null,sequence,true),false);
             sequence++;
 //            MemtableEntry old=memtables.getLast().getMemtable().put(byteArray,memtableEntry);

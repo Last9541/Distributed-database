@@ -22,7 +22,7 @@ import java.util.concurrent.Executors;
 public class Main {
 
 
-    public static ExecutorService ssTableWriter=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    public static ExecutorService ssTableWriter=Executors.newSingleThreadExecutor();
 
     private static Lsm lsm=new LsmImplementation();
 

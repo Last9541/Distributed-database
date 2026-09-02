@@ -17,6 +17,18 @@ public class Memtable {
 //    //todo promeniti i videti da li ovaj atribut postoji negde vec sada se ne secam
 //    private static long maxSize=999999;
 
+    public Memtable()
+    {
+
+    }
+
+    public Memtable(Memtable mem)
+    {
+        memtable=new ConcurrentSkipListMap<>(mem.memtable);
+        size=mem.size;
+        immutable=true;
+
+    }
 
     public SortedMap<ByteArray, MemtableEntry> getMemtable() {
         return memtable;

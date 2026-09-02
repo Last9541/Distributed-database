@@ -10,13 +10,15 @@ public class Config {
     private String log_level="info";
     private int rollSize=67108864;
     private int maxImmutableTables=4;
+    private int bloomFilterSizePerKey=12;
+    private int refreshN=10;
 
     public Config()
     {
 
     }
 
-    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables) {
+    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables,int bloomFilterSizePerKey,int refreshN) {
         this.dataDir = dataDir;
         this.memtableMaxBytes = memtableMaxBytes;
         this.blockSize = blockSize;
@@ -25,6 +27,25 @@ public class Config {
         this.compression = compression;
         this.log_level = log_level;
         this.maxImmutableTables=maxImmutableTables;
+        this.bloomFilterSizePerKey=bloomFilterSizePerKey;
+        this.refreshN=refreshN;
+    }
+
+
+    public int getBloomFilterSizePerKey() {
+        return bloomFilterSizePerKey;
+    }
+
+    public void setBloomFilterSizePerKey(int bloomFilterSizePerKey) {
+        this.bloomFilterSizePerKey = bloomFilterSizePerKey;
+    }
+
+    public int getRefreshN() {
+        return refreshN;
+    }
+
+    public void setRefreshN(int refreshN) {
+        this.refreshN = refreshN;
     }
 
     public int getMaxImmutableTables() {
