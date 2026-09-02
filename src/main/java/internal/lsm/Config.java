@@ -11,6 +11,7 @@ public class Config {
     private int rollSize=67108864;
     private int maxImmutableTables=4;
     private int bloomFilterSizePerKey=12;
+    private int bloomHashingFunctionNumber=3;
     private int refreshN=10;
 
     public Config()
@@ -18,7 +19,7 @@ public class Config {
 
     }
 
-    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables,int bloomFilterSizePerKey,int refreshN) {
+    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables,int bloomFilterSizePerKey,int bloomHashingFunctionNumber,int refreshN) {
         this.dataDir = dataDir;
         this.memtableMaxBytes = memtableMaxBytes;
         this.blockSize = blockSize;
@@ -28,9 +29,17 @@ public class Config {
         this.log_level = log_level;
         this.maxImmutableTables=maxImmutableTables;
         this.bloomFilterSizePerKey=bloomFilterSizePerKey;
+        this.bloomHashingFunctionNumber=bloomHashingFunctionNumber;
         this.refreshN=refreshN;
     }
 
+    public int getBloomHashingFunctionNumber() {
+        return bloomHashingFunctionNumber;
+    }
+
+    public void setBloomHashingFunctionNumber(int bloomHashingFunctionNumber) {
+        this.bloomHashingFunctionNumber = bloomHashingFunctionNumber;
+    }
 
     public int getBloomFilterSizePerKey() {
         return bloomFilterSizePerKey;

@@ -26,7 +26,7 @@ public class Main {
 
     private static Lsm lsm=new LsmImplementation();
 
-    static ObjectMapper mapper = new ObjectMapper();
+    public static ObjectMapper mapper = new ObjectMapper();
 
     private static Config instance=new Config();
 

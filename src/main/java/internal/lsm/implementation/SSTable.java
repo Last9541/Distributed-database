@@ -1,14 +1,19 @@
 package internal.lsm.implementation;
 
+import cmd.lsmkv.Main;
 import internal.lsm.Config;
+import internal.lsm.Manifest;
+import internal.lsm.ManifestEntry;
 import internal.lsm.errors.IOFailure;
 import internal.lsm.errors.InvalidArgument;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.CRC32C;
@@ -16,6 +21,10 @@ import java.util.zip.CRC32C;
 public class SSTable {
 
     protected Path sstPath;
+
+    private File manifestFile=new File("data/manifest.json");
+
+    private Manifest manifest=new Manifest();
 
     private long segmentId=0;
 
@@ -74,7 +83,7 @@ public class SSTable {
     {
         int fun1=hashFun1(key,m);
         int fun2=Math.max(1,hashFun2(key,m));
-        for(int i=1;i<=3;i++)
+        for(int i=1;i<=config.getBloomHashingFunctionNumber();i++)
         {
             int index=add(fun1,mul(i,fun2,m),m);
             if((bloom[index/8]&(byte) (1<<(index%8)))==0)
@@ -101,6 +110,8 @@ public class SSTable {
             throw new InvalidArgument("Ovo ne sme da se ikada desi ako se desilo proveri STO STO STO");
         //todo proveriti da li mi trebaju sve ove permisije
         Path sstTmp=sstPath.resolve(Path.of(String.format("%06d.sst.tmp", tempSegmentIncrementAndGet())));
+        long minSeqNo=memtable.getMemtable().firstEntry().getValue().getSeqNo();
+        long maxSeqNo=minSeqNo;
         try(FileChannel fileChannel = FileChannel.open(sstTmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)){
             //todo jednog dana ovde ce doci magic/version al me jako mrzi sada da se bakcem time, takodje i dalje fali provera toga u wal-u nemoj zaboraviti
             ByteBuffer record = ByteBuffer.allocate(headerSize);
@@ -126,6 +137,10 @@ public class SSTable {
             int count=0;
 
             for (MemtableEntry memtableEntry : memtable.getMemtable().values()) {
+                if(memtableEntry.getSeqNo()>maxSeqNo)
+                    maxSeqNo=memtableEntry.getSeqNo();
+                if(memtableEntry.getSeqNo()<minSeqNo)
+                    minSeqNo=memtableEntry.getSeqNo();
                 int additionalSize=0;
 
                 if(count%config.getRefreshN()==0) {
@@ -211,8 +226,12 @@ public class SSTable {
             }
 
             fileChannel.force(true);
-            Files.move(sstTmp,sstPath.resolve(Path.of(String.format("%06d.sst", segmentIncrementAndGet()))), StandardCopyOption.ATOMIC_MOVE);
-//            lsmImplementation.walDelete(segmentId); nemoj da ovo otkomentarises hocu samo da ostane i ovde u jednom commitu
+            long id=segmentIncrementAndGet();
+            String filename=String.format("%06d.sst",id);
+            Path filePath=sstPath.resolve(Path.of(filename));
+            Files.move(sstTmp,filePath, StandardCopyOption.ATOMIC_MOVE);
+            manifest.add(new ManifestEntry(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber()));
+            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFile,manifest);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
