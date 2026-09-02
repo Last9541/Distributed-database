@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
 
@@ -31,8 +32,8 @@ public class LsmImplementation extends SSTable implements Lsm {
     private long sequence=1;
     private long segmentId=1;
     private Object walLock=new Object();
-    private final Object conditionMemtableLock=new Object();
-    private final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
+    final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
+    final Condition conditionMemtableLock=memtableListLock.writeLock().newCondition();
     private FileChannel channel;
     private Path dataPath;
     private Path walPath;
@@ -62,7 +63,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         //init();
     }
 
-    private boolean bufferRead(ByteBuffer byteBuffer,FileChannel fileChannel) throws IOException, IOFailure {
+    private boolean bufferRead(ByteBuffer byteBuffer,FileChannel fileChannel) throws IOException {
         while (byteBuffer.hasRemaining()) {
             if (fileChannel.read(byteBuffer) == -1) {
                 return false;
@@ -80,7 +81,7 @@ public class LsmImplementation extends SSTable implements Lsm {
     }
 
     public void init(Config config) throws IOException {
-        if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize)
+        if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize || config.getBlockSize()<config.getMemtableMaxBytes())
             throw new InvalidArgument("Premali blockSize u config");
         closed=false;
         this.config=config;
@@ -198,10 +199,13 @@ public class LsmImplementation extends SSTable implements Lsm {
                                 }
 
                             }
-                          //todo posle obrisati ovaj catch i sve u Mainu da se regulise
-                        } catch (IOFailure e) {
-                            throw new RuntimeException(e);
+
                         }
+                        //todo posle obrisati ovaj catch i sve u Mainu da se regulise
+                        //TODO zakomentarisao sam, proveriti da li mi treba uopste
+//                        catch (IOFailure e) {
+//                            throw new RuntimeException(e);
+//                        }
                     }
                     catch (NumberFormatException ignored)
                     {
@@ -257,7 +261,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
     }
 
-    private void walWrite(byte[] bytes) throws IOException, IOFailure {
+    private void walWrite(byte[] bytes) throws IOException {
         crc32C.update(bytes,0,bytes.length);
         ByteBuffer fullRecord = ByteBuffer.allocate(Integer.BYTES+bytes.length+Integer.BYTES);
         fullRecord.putInt(bytes.length);
@@ -297,7 +301,6 @@ public class LsmImplementation extends SSTable implements Lsm {
         while(write && (memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE))
         {
             //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
-            //todo moze da se napise i da je  memtableEntry.getSize() >= config.getMemtableMaxBytes()
             if(memtables.getLast().getSize()==0)
                 throw new IOFailure();
 
@@ -309,27 +312,29 @@ public class LsmImplementation extends SSTable implements Lsm {
             }
 
             //todo ovde ce ici upisivanje u SSTable
-            Main.ssTableWriter.submit(this::ssTableWrite);
+            Main.ssTableWriter.submit(()->ssTableWrite(new ArrayList<>(memtables)));
             if(recovery) {
                 memtables.getLast().getMemtable().clear();
                 memtables.getLast().setSize(0);
             }
             else {
-                //todo kompletiraj u sstabeli ovaj condition lock
-                synchronized (conditionMemtableLock) {
-                    while (memtables.size() > config.getMaxImmutableTables()) {
-                        blockWrite = true; //todo trenutno mi ovo ne treba jer je write 1 thread al za slucaj da se to ikad promeni
-                        conditionMemtableLock.wait();
-                    }
-                    blockWrite=false;
-                }
 
                 memtableListLock.writeLock().lock();
+                try {
+                    while (memtables.size() > config.getMaxImmutableTables()) {
+                        blockWrite = true; //todo trenutno mi ovo ne treba jer je write 1 thread al za slucaj da se to ikad promeni
+                        conditionMemtableLock.await();
+                    }
+                    blockWrite=false;
                     memtables.getLast().setImmutable(true);
                     //todo racunanje ne mora da bude unutar locka sa obzirom da smo sigurni da cemo imati 1 writera, al ako se to promeni onda je korisno
                     immutablesSize+=memtables.getLast().getSize();
                     memtables.add(new Memtable());
-                memtableListLock.writeLock().unlock();
+                }
+                finally {
+                    memtableListLock.writeLock().unlock();
+                }
+
             }
         }
         if(write)
@@ -370,7 +375,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             walWrite(buffer.array());
             memtableWrite(new ByteArray(keyBytes),new MemtableEntry(keyBytes,valueBytes,sequence,false),false);
             sequence++;
-        } catch (IOException | IOFailure | InterruptedException e) {
+        } catch (IOException  | InterruptedException e) {
             throw new RuntimeException(e);
         }
     }
@@ -428,7 +433,7 @@ public class LsmImplementation extends SSTable implements Lsm {
 //            if(old!=null)
 //                memtables.getLast().decrementSize(old.getSize());
 //            memtables.getLast().incrementSize(memtableEntry.getSize());
-        } catch (IOException | IOFailure | InterruptedException e) {
+        } catch (IOException | InterruptedException e) {
             throw new RuntimeException(e);
         }
     }

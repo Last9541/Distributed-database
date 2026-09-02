@@ -4,8 +4,8 @@ import java.util.Arrays;
 
 //todo da li treba da se racuna i velicina samog pokazivaca za key i value (pointer size)
 public class MemtableEntry {
-    private byte[] key;
-    private byte[] value;
+    private byte[] key=new byte[0];
+    private byte[] value=new byte[0];
     private long seqNo;
     private boolean isTombstone;
     public static final long documentedSize=Long.BYTES+Byte.BYTES+32;

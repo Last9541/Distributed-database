@@ -12,6 +12,7 @@ public class Memtable {
     private long size;
 
     private boolean immutable;
+    private boolean read=false;
 
 //    //todo promeniti i videti da li ovaj atribut postoji negde vec sada se ne secam
 //    private static long maxSize=999999;
@@ -42,6 +43,15 @@ public class Memtable {
 //    public static void setMaxSize(long maxSize) {
 //        Memtable.maxSize = maxSize;
 //    }
+
+
+    public boolean isRead() {
+        return read;
+    }
+
+    public void setRead(boolean read) {
+        this.read = read;
+    }
 
     public void setSize(long size) {
         this.size = size;

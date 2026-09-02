@@ -1,17 +1,16 @@
 package internal.lsm.implementation;
 
 import internal.lsm.Config;
+import internal.lsm.errors.IOFailure;
 import internal.lsm.errors.InvalidArgument;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.CRC32C;
 
 public class SSTable {
 
@@ -26,6 +25,11 @@ public class SSTable {
     protected Config config;
 
     private final int bloomFilterSizePerKey=12;
+
+    private int refreshN=10;
+
+
+    private CRC32C crc32C=new CRC32C();
 
 
     private int add(long a,long b,int m)
@@ -42,7 +46,7 @@ public class SSTable {
     {
         int hash=0;
         for (byte b : key) {
-            hash = add(mul(hash, 26, m), b + 128, m);
+            hash = add(mul(hash, 257, m), b + 128, m);
         }
         return hash;
     }
@@ -51,7 +55,7 @@ public class SSTable {
     {
         int hash=0;
         for (byte b : key) {
-            hash = add(mul(hash, 27, m), b + 128, m);
+            hash = add(mul(hash, 263, m), b + 128, m);
         }
         return hash;
     }
@@ -83,16 +87,17 @@ public class SSTable {
 
     private void ssTableWrite(Memtable memtable)
     {
-        List<SparseIndexEntry>sparseIndex=new ArrayList<>();
+        List<IndexEntry>sparseIndex=new ArrayList<>();
         //todo ovo ako se ne secam nece raditi ali da vidim da li barem pomaze u compile time
         assert lsmImplementation!=null;
         if(!memtable.isImmutable())
             throw new InvalidArgument("Ovo ne sme da se ikada desi ako se desilo proveri STO STO STO");
         //todo proveriti da li mi trebaju sve ove permisije
-        try(FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(String.format("%06d.sst.tmp", tempSegmentId))), StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)){
+        Path sstTmp=sstPath.resolve(Path.of(String.format("%06d.sst.tmp", tempSegmentId++)));
+        try(FileChannel fileChannel = FileChannel.open(sstTmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)){
             //todo jednog dana ovde ce doci magic/version al me jako mrzi sada da se bakcem time, takodje i dalje fali provera toga u wal-u nemoj zaboraviti
 //            long bytesSum=0;
-            long blockSize=0;
+//            long blockSize=0;
 
             int no=bloomFilterSizePerKey*memtable.getMemtable().size()/8;
             if(bloomFilterSizePerKey*memtable.getMemtable().size()%8!=0)
@@ -112,38 +117,66 @@ public class SSTable {
             }
 
             //todo posto je ovo int ima smisla da i memtable size i memtable entry size bude int
-            //todo proveri da li ce ovo sa 0 da radi
             ByteBuffer block = ByteBuffer.allocate(0);
             //todo ne treba ti ovo sa blockom
+
+            List<IndexEntry> restartPoints=new ArrayList<>();
+            int restartSize=0;
+            int count=0;
+
             for (MemtableEntry memtableEntry : memtable.getMemtable().values()) {
-                if(blockSize<memtableEntry.getSize()) {
-                    block.flip();
-                    while(block.hasRemaining())
-                    {
-                        //todo proveri zasto se ovde ne zuti intelij
-                        fileChannel.write(block);
-                    }
-                    blockSize=config.getBlockSize();
-                    block=ByteBuffer.allocate((int) blockSize);
-                    //todo ne vidim svrhu da pisem ovo na pocetku
-//                    block.putInt(memtableEntry.getKey().length);
-//                    block.put(memtableEntry.getKey());
-                    //todo proveri da li ovo uzimamo
-                    sparseIndex.add(new SparseIndexEntry(memtableEntry.getKey(),fileChannel.position()));
+                int additionalSize=0;
+
+                if(count%refreshN==0) {
+                    additionalSize = Integer.BYTES + Long.BYTES + memtableEntry.getKey().length;
                 }
-                    block.putInt(memtableEntry.getKey().length);
-                    block.put(memtableEntry.getKey());
-                    block.putInt(memtableEntry.getValue().length);
-                    block.put(memtableEntry.getValue());
-                    block.putLong(memtableEntry.getSeqNo());
-                    block.put(memtableEntry.isTombstone()?(byte) 1:(byte) 0);
-//                bytesSum+=memtableEntry.getSize();
+
+
+                while(block.remaining()<memtableEntry.getSize()+restartSize+additionalSize+Integer.BYTES*2+Long.BYTES) {
+
+                    if(block.remaining()==config.getBlockSize())
+                        throw new IOFailure("oVoneSmeDaSeDesI");
+
+                    if(block.remaining()!=0)
+                    {
+                    blockWrite(fileChannel, block, restartPoints);
+                    }
+                    restartPoints.clear();
+                    restartSize=0;
+                    count=0;
+                    additionalSize = Integer.BYTES + Long.BYTES + memtableEntry.getKey().length;
+                    block=ByteBuffer.allocate(config.getBlockSize());
+                    sparseIndex.add(new IndexEntry(memtableEntry.getKey(),fileChannel.position()));
+                }
+
+                    ByteBuffer buffer=ByteBuffer.allocate(Integer.BYTES*2+Long.BYTES+Byte.BYTES+memtableEntry.getKey().length+memtableEntry.getValue().length);
+                    //todo dodaj prefix (delta) compression
+                    buffer.putInt(memtableEntry.getKey().length);
+                    buffer.put(memtableEntry.getKey());
+                    buffer.putInt(memtableEntry.getValue().length);
+                    buffer.put(memtableEntry.getValue());
+                    buffer.putLong(memtableEntry.getSeqNo());
+                    buffer.put(memtableEntry.isTombstone()?(byte) 1:(byte) 0);
+
+                    if(count%refreshN==0)
+                    {
+                        IndexEntry indexEntry=new IndexEntry(memtableEntry.getKey(),fileChannel.position());
+                        restartPoints.add(indexEntry);
+                        //todo moze i +=additionalSize
+                        restartSize+=indexEntry.getSize();
+                    }
+                    byte[] arr=new byte[buffer.position()];
+                    buffer.flip();
+                    buffer.asReadOnlyBuffer().get(arr);
+                    block.put(arr);
+                    while(buffer.hasRemaining())
+                    {
+                        fileChannel.write(buffer);
+                    }
+                    count++;
             }
-            block.flip();
-            while(block.hasRemaining())
-            {
-                fileChannel.write(block);
-            }
+            if(block.remaining()!=0)
+                blockWrite(fileChannel, block, restartPoints);
             long pos=fileChannel.position();
             ByteBuffer size=ByteBuffer.allocate(Integer.BYTES);
             size.putInt(sparseIndex.size());
@@ -152,9 +185,10 @@ public class SSTable {
             {
                 fileChannel.write(size);
             }
-            for(SparseIndexEntry sparseIndexEntry:sparseIndex)
+            for(IndexEntry sparseIndexEntry:sparseIndex)
             {
-                ByteBuffer byteBuffer=ByteBuffer.allocate(sparseIndexEntry.getKey().length + Long.BYTES);
+                ByteBuffer byteBuffer=ByteBuffer.allocate(sparseIndexEntry.getKey().length + Long.BYTES + Integer.BYTES);
+                byteBuffer.putInt(sparseIndexEntry.getKey().length);
                 byteBuffer.put(sparseIndexEntry.getKey());
                 byteBuffer.putLong(sparseIndexEntry.getIndex());
                 byteBuffer.flip();
@@ -173,12 +207,57 @@ public class SSTable {
             }
 
 
-            //todo proveriti gde staviti ovo
-            tempSegmentId++;
-            //todo ovde mora nekako i atomicno menjanje imena fajla ovo videti
+//            //todo proveriti gde staviti ovo
+//            tempSegmentId++;
             fileChannel.force(true);
+            Files.move(sstTmp,sstPath.resolve(Path.of(String.format("%06d.sst", segmentId++))), StandardCopyOption.ATOMIC_MOVE);
+            lsmImplementation.memtableListLock.writeLock().lock();
+            try {
+                lsmImplementation.getMemtables().remove(memtable);
+                if (lsmImplementation.getMemtables().size() == config.getMaxImmutableTables()) {
+                    lsmImplementation.conditionMemtableLock.signalAll();
+                }
+            }
+            finally {
+                lsmImplementation.memtableListLock.writeLock().unlock();
+            }
+
+
+
         } catch (IOException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    private void blockWrite(FileChannel fileChannel, ByteBuffer block, List<IndexEntry> restartPoints) throws IOException {
+
+        ByteBuffer checksumAndRestartPoints=ByteBuffer.allocate(block.remaining());
+        //todo mora da se doda i duzina
+        checksumAndRestartPoints.putInt(restartPoints.size());
+        block.putInt(restartPoints.size());
+        for(IndexEntry indexEntry:restartPoints)
+        {
+            checksumAndRestartPoints.putInt(indexEntry.getKey().length);
+            block.putInt(indexEntry.getKey().length);
+            checksumAndRestartPoints.put(indexEntry.getKey());
+            block.put(indexEntry.getKey());
+            checksumAndRestartPoints.putLong(indexEntry.getIndex());
+            block.putLong(indexEntry.getIndex());
+        }
+        checksumAndRestartPoints.putLong(fileChannel.position());
+        block.putLong(fileChannel.position());
+        byte[] arr=new byte[block.position()];
+        ByteBuffer read=block.asReadOnlyBuffer();
+        read.flip();
+        read.get(arr);
+        crc32C.update(arr,0,arr.length);
+        int checksum=(int)crc32C.getValue();
+        crc32C.reset();
+        checksumAndRestartPoints.putInt(checksum);
+        checksumAndRestartPoints.flip();
+        while(checksumAndRestartPoints.hasRemaining())
+        {
+            fileChannel.write(checksumAndRestartPoints);
         }
     }
 
@@ -190,7 +269,7 @@ public class SSTable {
                 try {
                     String name = file.getFileName().toString();
                     if (Files.isRegularFile(file) && name.contains(".")) {
-                        if (name.substring(name.indexOf('.')).equals(".tmp")) {
+                        if (name.substring(name.indexOf('.')).equals(".sst")) {
                             segmentId = Math.max(segmentId, Long.parseLong(name.substring(0, name.indexOf('.'))));
 
                         } else {
@@ -213,18 +292,21 @@ public class SSTable {
         }
     }
 
-    public void ssTableWrite()
+    public void ssTableWrite(List<Memtable>copy)
     {
 
         if(!(this instanceof LsmImplementation))
             throw new RuntimeException("Ako ikad dodje ovde onda nzm sta da kazem");
         lsmImplementation=(LsmImplementation) this;
         loadSegmentsId();
-        //todo prebaci memtabele ovde
-        int len=lsmImplementation.getMemtables().size()-1;
-        for(int i=0;i<len;i++)
-        {
-            ssTableWrite(lsmImplementation.getMemtables().get(i));
+        for(Memtable x:copy){
+            //todo proveri ovo on a local variable
+            synchronized (x) {
+                if(!x.isRead()) {
+                    ssTableWrite(x);
+                    x.setRead(true);
+                }
+            }
         }
     }
 

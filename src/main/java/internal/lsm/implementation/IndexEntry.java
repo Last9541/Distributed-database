@@ -1,12 +1,14 @@
 package internal.lsm.implementation;
 
-public class SparseIndexEntry {
+public class IndexEntry {
     private byte[] key;
     private long index;
+    private int size=Long.BYTES;
 
-    public SparseIndexEntry(byte[] key, long index) {
+    public IndexEntry(byte[] key, long index) {
         this.key = key;
         this.index = index;
+        this.size+=key.length;
     }
 
     public byte[] getKey() {
@@ -21,7 +23,12 @@ public class SparseIndexEntry {
         return index;
     }
 
+
     public void setIndex(long index) {
         this.index = index;
+    }
+
+    public int getSize() {
+        return size;
     }
 }
