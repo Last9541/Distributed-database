@@ -4,10 +4,7 @@ import cmd.lsmkv.Main;
 import internal.lsm.Config;
 import internal.lsm.Lsm;
 import internal.lsm.RecordType;
-import internal.lsm.errors.IOFailure;
-import internal.lsm.errors.InvalidArgument;
-import internal.lsm.errors.NotFound;
-import internal.lsm.errors.StoreClosed;
+import internal.lsm.errors.*;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -65,15 +62,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         //init();
     }
 
-    private boolean bufferRead(ByteBuffer byteBuffer,FileChannel fileChannel) throws IOException {
-        while (byteBuffer.hasRemaining()) {
-            if (fileChannel.read(byteBuffer) == -1) {
-                return false;
-            }
-        }
-        byteBuffer.flip();
-        return true;
-    }
+
 
 
 
@@ -98,19 +87,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         System.out.println("truncated_segment="+file.getFileName().toString() + " truncated_to="+start);
     }
 
-    private void deleteSstTmp()
-    {
-        try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(sstPath)){
-            for(Path file:filesStream) {
-                String name = file.getFileName().toString();
-                if (Files.isRegularFile(file) && name.contains(".") && name.substring(name.indexOf('.')).equals(".sst.tmp")) {
-                    Files.deleteIfExists(file);
-                }
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
+
 
     public void init(Config config) throws IOException {
         if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize || config.getBlockSize()<config.getMemtableMaxBytes())
@@ -124,8 +101,8 @@ public class LsmImplementation extends SSTable implements Lsm {
         Files.createDirectories(walPath);
         sstPath=dataPath.resolve(Path.of("sst"));
         Files.createDirectories(sstPath);
-        deleteSstTmp();
-        super.loadSegmentsId();
+        super.init();
+
         long sequence=0;
         try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(walPath)) {
             List<Path> files=new ArrayList<>();
@@ -142,25 +119,11 @@ public class LsmImplementation extends SSTable implements Lsm {
                     try {
                         segmentId = Math.max(segmentId, Long.parseLong(name.substring(0, name.indexOf('.'))));
                         try (FileChannel fileChannel = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-                            ByteBuffer byteBuffer = ByteBuffer.allocate(headerSize);
-                            if (!bufferRead(byteBuffer, fileChannel))
-                                throw new IOFailure("Nevalidan header");
-                            //todo ovaj header mora da se validira, ne zaboravi to
-                            byte[] header = new byte[headerSize];
-                            byteBuffer.get(header);
-                            String mag = new String(header, 0, magic.length(), StandardCharsets.US_ASCII);
-                            if (!magic.equals(mag))
-                                throw new IOFailure("Nevalidan magic");
-                            if (header[magic.length()] != 1)
-                                throw new IOFailure("Nevalidan version");
-                            for (int i = magic.length() + 1; i < headerSize; i++) {
-                                if (header[i] != 0)
-                                    throw new IOFailure("Greska pri ucitavanju fajla");
-                            }
+                            headerCheck(fileChannel,headerSize,magic);
                             long size = fileChannel.size();
                             while (fileChannel.position() < size) {
                                 long start = fileChannel.position();
-                                byteBuffer = ByteBuffer.allocate(Integer.BYTES);
+                                ByteBuffer byteBuffer = ByteBuffer.allocate(Integer.BYTES);
                                 if (!bufferRead(byteBuffer, fileChannel)) {
                                     trunc(fileChannel, start, file);
                                     break;
@@ -173,7 +136,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                                 }
                                 if (len > lenSize) {
                                     trunc(fileChannel, start, file);
-                                    throw new RuntimeException();
+                                    break;
                                 }
                                 byteBuffer = ByteBuffer.allocate(len);
                                 if (!bufferRead(byteBuffer, fileChannel)) {
@@ -208,7 +171,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                                     }
                                     //TODO napraviti novi exception za ovo
                                     if (keyBytesLength > keySize)
-                                        throw new IOFailure();
+                                        throw new Exception();
                                     byte[] keyArray = new byte[keyBytesLength];
                                     byte[] valueArray = null;
                                     later.get(keyArray);
@@ -217,7 +180,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                                     if (valueBytesLength > later.remaining())
                                         throw new Exception();
                                     if (valueBytesLength > valueSize)
-                                        throw new IOFailure();
+                                        throw new Exception();
                                     if (valueBytesLength > 0) {
                                         valueArray = new byte[valueBytesLength];
                                         later.get(valueArray);
@@ -228,9 +191,11 @@ public class LsmImplementation extends SSTable implements Lsm {
                                     //todo ovde ipak neces praviti nove instance nego ces flushovati kada se napuni pa prazniti stablo
                                     memtableWrite(new ByteArray(keyArray), new MemtableEntry(keyArray, valueArray, newSequence, recordType == RecordType.DELETE), true);
                                     sequence = Math.max(sequence, newSequence);
-                                } catch (IOFailure ioFailure) {
-                                    throw ioFailure;
-                                } catch (Exception e) {
+                                }
+//                                catch (IOFailure ioFailure) {
+//                                    throw ioFailure;
+//                                }
+                                catch (Exception e) {
                                     trunc(fileChannel, start, file);
                                     break;
                                 }
@@ -251,9 +216,10 @@ public class LsmImplementation extends SSTable implements Lsm {
             this.sequence=sequence+1;
             channelInit();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new IOFailure();
         }
     }
+
 
     @Override
     public String stats() {

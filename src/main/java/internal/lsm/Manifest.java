@@ -1,15 +1,14 @@
 package internal.lsm;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 public class Manifest {
 
 
-    private List<ManifestEntry> list=new ArrayList<>();
+    private List<TableHandle> list=new ArrayList<>();
 
-    public Manifest(List<ManifestEntry> list) {
+    public Manifest(List<TableHandle> list) {
         this.list = list;
     }
     public Manifest()
@@ -17,16 +16,16 @@ public class Manifest {
 
     }
 
-    public synchronized void add(ManifestEntry manifestEntry)
+    public synchronized void add(TableHandle tableHandle)
     {
-        list.add(manifestEntry);
+        list.add(tableHandle);
     }
 
-    public List<ManifestEntry> getList() {
+    public List<TableHandle> getList() {
         return list;
     }
 
-    public void setList(List<ManifestEntry> list) {
+    public void setList(List<TableHandle> list) {
         this.list = list;
     }
 }
