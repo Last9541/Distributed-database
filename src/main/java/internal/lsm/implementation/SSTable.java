@@ -43,6 +43,8 @@ public class SSTable {
 
     private int headerSize=8;
 
+    private int footerSize=2*Integer.BYTES + 2*Long.BYTES;
+
     private int add(long a,long b,int m)
     {
         return (int)((a%m + b%m)%m);
@@ -85,34 +87,59 @@ public class SSTable {
     public void init()
     {
         try {
-            if (!Files.notExists(manifestFile.toPath())) {
+            if (Files.notExists(manifestFile.toPath())) {
                 Files.createFile(manifestFile.toPath());
             } else {
-                Main.mapper.readValue(manifestFile, Manifest.class);
-                for(TableHandle x: manifest.getList())
-                {
-                    //todo sta ako se osnovna putanja promenila
-                    try(FileChannel fileChannel=FileChannel.open(sstPath.resolve(Path.of(x.getFileName())),StandardOpenOption.READ))
-                    {
-                        long size=fileChannel.size();
-                        headerCheck(fileChannel,headerSize,magic);
-                        fileChannel.position(size-2* Integer.BYTES - 2*Long.BYTES);
-                        ByteBuffer byteBuffer=ByteBuffer.allocate(2*Integer.BYTES + 2*Long.BYTES);
-                        if(!bufferRead(byteBuffer,fileChannel))
-                            throw new CorruptionDetected("Nevalidan footer");
-                        long sparsePos=byteBuffer.getLong();
-                        if(sparsePos>=size||sparsePos<headerSize)
-                            throw new CorruptionDetected("Nemoguca pocetna pozicija za sparseIndex");
-                        int sparseSize=byteBuffer.getInt();
-                        //ovo je bas gornji prag za sparseSize, mogu da podelim ovu velicinu sa velicinom iz configa pa da nadjem koliko je priblizno velik, samo sto se ta velicina moze menjati
-                        if(sparseSize<=0 || sparseSize>size-headerSize)
-                            throw new CorruptionDetected("Nevalidan sparseSize");
-                        long bloomPos=byteBuffer.getLong();
-                        if(bloomPos>=size||bloomPos<headerSize)
-                            throw new CorruptionDetected("Nemoguca pocetna pozicija za bloomIndex");
-                        int bloomSize=byteBuffer.getInt();
-                        if(bloomSize<=0 || bloomSize>size-headerSize)
-                            throw new CorruptionDetected("Nevalidan bloomSize");
+                if(Files.size(manifestFile.toPath())!=0) {
+                    manifest = Main.mapper.readValue(manifestFile, Manifest.class);
+                    for (TableHandle x : manifest.getList()) {
+                        //todo sta ako se osnovna putanja promenila
+                        try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
+                            long size = fileChannel.size();
+                            long footerStart = size - footerSize;
+                            if (footerStart < headerSize)
+                                throw new CorruptionDetected("Premali fajl");
+                            headerCheck(fileChannel, headerSize, magic);
+                            fileChannel.position(footerStart);
+                            ByteBuffer byteBuffer = ByteBuffer.allocate(footerSize);
+                            if (!bufferRead(byteBuffer, fileChannel))
+                                throw new CorruptionDetected("Nevalidan footer");
+                            long sparsePos = byteBuffer.getLong();
+                            if (sparsePos >= footerStart || sparsePos < headerSize)
+                                throw new CorruptionDetected("Nemoguca pocetna pozicija za sparseIndex");
+                            int sparseSize = byteBuffer.getInt();
+                            //ovo je bas gornji prag za sparseSize, mogu da podelim ovu velicinu sa velicinom iz configa pa da nadjem koliko je priblizno velik, samo sto se ta velicina moze menjati
+                            if (sparseSize <= 0 || sparseSize > size - headerSize)
+                                throw new CorruptionDetected("Nevalidan sparseSize");
+                            long bloomPos = byteBuffer.getLong();
+                            if (bloomPos >= footerStart || bloomPos < headerSize)
+                                throw new CorruptionDetected("Nemoguca pocetna pozicija za bloomIndex");
+                            if (bloomPos>=sparsePos)
+                                throw new CorruptionDetected("Bloom i sparse delovi se seku");
+                            int bloomSize = byteBuffer.getInt();
+                            if (bloomSize <= 0 || bloomSize > size - headerSize || footerStart - bloomPos != bloomSize)
+                                throw new CorruptionDetected("Nevalidan bloomSize");
+                            fileChannel.position(sparsePos);
+                            List<IndexEntry>list=new ArrayList<>();
+                            for(int i=0;i<sparseSize;i++)
+                            {
+                                if(bloomPos - fileChannel.position()<Integer.BYTES)
+                                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                                byteBuffer=ByteBuffer.allocate(Integer.BYTES);
+                                if (!bufferRead(byteBuffer, fileChannel))
+                                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                                int length=byteBuffer.getInt();
+                                if(bloomPos - fileChannel.position()<length+Long.BYTES)
+                                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                                byteBuffer=ByteBuffer.allocate(length+Long.BYTES);
+                                if (!bufferRead(byteBuffer, fileChannel))
+                                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                                byte[] key=new byte[length];
+                                byteBuffer.get(key);
+                                long offset=byteBuffer.getLong();
+                                list.add(new IndexEntry(key,offset));
+                            }
+                        }
                     }
                 }
             }
@@ -302,7 +329,7 @@ public class SSTable {
                 fileChannel.write(bloomBuffer);
             }
 
-            ByteBuffer posBuf=ByteBuffer.allocate(Long.BYTES*2 + 2*Integer.BYTES);
+            ByteBuffer posBuf=ByteBuffer.allocate(footerSize);
             posBuf.putLong(pos);
             posBuf.putInt(sparseIndex.size());
             posBuf.putLong(pos2);
