@@ -1,5 +1,7 @@
 package internal.lsm.implementation;
 
+import internal.lsm.Global;
+
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -15,13 +17,7 @@ public class ByteArray implements Comparable<ByteArray> {
 
     @Override
     public int compareTo(ByteArray o) {
-        int len=Math.min(bytes.length,o.bytes.length);
-        for(int i=0;i<len;i++)
-        {
-            if(bytes[i]!=o.bytes[i])
-                return Byte.compareUnsigned(bytes[i], o.bytes[i]);
-        }
-        return bytes.length-o.bytes.length;
+       return Global.compareTo(bytes,o.bytes);
     }
 
     @Override

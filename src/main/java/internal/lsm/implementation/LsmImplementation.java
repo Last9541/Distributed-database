@@ -15,6 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
@@ -40,7 +42,7 @@ public class LsmImplementation extends SSTable implements Lsm {
     private int n=1;
     private boolean closed;
     private int truncated;
-    private boolean blockWrite;
+    public boolean blockWrite;
     //todo prebaci u config
     private final long keySize=64000;
     private final long valueSize=16777216;
@@ -427,7 +429,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                 MemtableEntry entry = memtables.get(i).getMemtable().get(new ByteArray(key));
                 if (entry != null) {
                     if (entry.isTombstone())
-                        break;
+                        throw new NotFound();
                     return entry.getValue();
                 }
             }
@@ -435,7 +437,8 @@ public class LsmImplementation extends SSTable implements Lsm {
         finally {
             memtableListLock.readLock().unlock();
         }
-        throw new NotFound();
+        return ssTableRead(key);
+
     }
 
     @Override
@@ -471,15 +474,18 @@ public class LsmImplementation extends SSTable implements Lsm {
     //todo pogledati da li ostati na try catch ili preci na throws
     @Override
     public void close() {
+        //todo dodaj pored ovoga da se mora sacekati da se zavrsi metoda
         if(closed)
             throw new StoreClosed();
         if(config==null)
             throw new RuntimeException("Nisi uradio init");
         try {
+            Future<?> f=Main.ssTableWriter.submit(()->{});
+            f.get();
             channel.force(true);
             channel.close();
             closed=true;
-        } catch (IOException e) {
+        } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
 

@@ -19,11 +19,14 @@ public class TableHandle {
     private int bloomFilterSizePerKey;
     private int bloomHashingFunctionNumber;
     @JsonIgnore
-    private List<IndexEntry> sparseIndex;
-    @JsonIgnore
     private int sparseIndexSize;
     @JsonIgnore
-    private byte[] bloomFilter;
+    private long sparseIndexPos;
+    @JsonIgnore
+    private long bloomFilterPos;
+    @JsonIgnore
+    private int bloomFilterSize;
+
 
     public TableHandle()
     {
@@ -33,7 +36,7 @@ public class TableHandle {
     public TableHandle(long id, String fileName, byte[] minKey,
                        byte[] maxKey, long minSeqNo, long maxSeqNo, Instant createdAt,
                        long fileSize, int bloomFilterSizePerKey, int bloomHashingFunctionNumber,
-                       List<IndexEntry> sparseIndex, int sparseIndexSize,byte[] bloomFilter) {
+                       long sparseIndexPos, int sparseIndexSize,long bloomFilterPos,int bloomFilterSize) {
         this.id = id;
         this.fileName = fileName;
         this.minKey = minKey;
@@ -44,14 +47,12 @@ public class TableHandle {
         this.fileSize = fileSize;
         this.bloomFilterSizePerKey = bloomFilterSizePerKey;
         this.bloomHashingFunctionNumber = bloomHashingFunctionNumber;
-        this.sparseIndex=sparseIndex;
+        this.sparseIndexPos=sparseIndexPos;
         this.sparseIndexSize=sparseIndexSize;
-        this.bloomFilter=bloomFilter;
+        this.bloomFilterPos=bloomFilterPos;
+        this.bloomFilterSize=bloomFilterSize;
     }
-    @JsonIgnore
-    public void setSparseIndex(List<IndexEntry> sparseIndex) {
-        this.sparseIndex = sparseIndex;
-    }
+
     @JsonIgnore
     public int getSparseIndexSize() {
         return sparseIndexSize;
@@ -60,20 +61,36 @@ public class TableHandle {
     public void setSparseIndexSize(int sparseIndexSize) {
         this.sparseIndexSize = sparseIndexSize;
     }
+
     @JsonIgnore
-    public byte[] getBloomFilter() {
-        return bloomFilter;
-    }
-    @JsonIgnore
-    public void setBloomFilter(byte[] bloomFilter) {
-        this.bloomFilter = bloomFilter;
+    public long getSparseIndexPos() {
+        return sparseIndexPos;
     }
 
     @JsonIgnore
-    public List<IndexEntry> getSparseIndex() {
-        return sparseIndex;
+    public void setSparseIndexPos(long sparseIndexPos) {
+        this.sparseIndexPos = sparseIndexPos;
     }
 
+    @JsonIgnore
+    public long getBloomFilterPos() {
+        return bloomFilterPos;
+    }
+
+    @JsonIgnore
+    public void setBloomFilterPos(long bloomFilterPos) {
+        this.bloomFilterPos = bloomFilterPos;
+    }
+
+    @JsonIgnore
+    public int getBloomFilterSize() {
+        return bloomFilterSize;
+    }
+
+    @JsonIgnore
+    public void setBloomFilterSize(int bloomFilterSize) {
+        this.bloomFilterSize = bloomFilterSize;
+    }
 
     public long getId() {
         return id;

@@ -1,16 +1,13 @@
 package internal.lsm;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 public class Manifest {
 
 
-    private List<TableHandle> list=new ArrayList<>();
+    private Set<TableHandle> set=new TreeSet<>((a,b)->b.getFileName().compareTo(a.getFileName()));
 
-    public Manifest(List<TableHandle> list) {
-        this.list = list;
-    }
     public Manifest()
     {
 
@@ -18,14 +15,12 @@ public class Manifest {
 
     public synchronized void add(TableHandle tableHandle)
     {
-        list.add(tableHandle);
+        set.add(tableHandle);
     }
 
-    public List<TableHandle> getList() {
-        return list;
+    public Set<TableHandle> getSet() {
+        return set;
     }
 
-    public void setList(List<TableHandle> list) {
-        this.list = list;
-    }
+
 }

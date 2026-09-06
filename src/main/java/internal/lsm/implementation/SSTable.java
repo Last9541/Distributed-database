@@ -2,11 +2,13 @@ package internal.lsm.implementation;
 
 import cmd.lsmkv.Main;
 import internal.lsm.Config;
+import internal.lsm.Global;
 import internal.lsm.Manifest;
 import internal.lsm.TableHandle;
 import internal.lsm.errors.CorruptionDetected;
 import internal.lsm.errors.IOFailure;
 import internal.lsm.errors.InvalidArgument;
+import internal.lsm.errors.NotFound;
 
 import java.io.File;
 import java.io.IOException;
@@ -39,7 +41,7 @@ public class SSTable {
 
     private String magic="SSTB";
 
-    private CRC32C crc32C=new CRC32C();
+    private final CRC32C crc32C=new CRC32C();
 
     private int headerSize=8;
 
@@ -92,7 +94,7 @@ public class SSTable {
             } else {
                 if(Files.size(manifestFile.toPath())!=0) {
                     manifest = Main.mapper.readValue(manifestFile, Manifest.class);
-                    for (TableHandle x : manifest.getList()) {
+                    for (TableHandle x : manifest.getSet()) {
                         //todo sta ako se osnovna putanja promenila
                         try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
                             long size = fileChannel.size();
@@ -119,26 +121,10 @@ public class SSTable {
                             int bloomSize = byteBuffer.getInt();
                             if (bloomSize <= 0 || bloomSize > size - headerSize || footerStart - bloomPos != bloomSize)
                                 throw new CorruptionDetected("Nevalidan bloomSize");
-                            fileChannel.position(sparsePos);
-                            List<IndexEntry>list=new ArrayList<>();
-                            for(int i=0;i<sparseSize;i++)
-                            {
-                                if(bloomPos - fileChannel.position()<Integer.BYTES)
-                                    throw new CorruptionDetected("Nevalidan sparseIndex");
-                                byteBuffer=ByteBuffer.allocate(Integer.BYTES);
-                                if (!bufferRead(byteBuffer, fileChannel))
-                                    throw new CorruptionDetected("Nevalidan sparseIndex");
-                                int length=byteBuffer.getInt();
-                                if(bloomPos - fileChannel.position()<length+Long.BYTES)
-                                    throw new CorruptionDetected("Nevalidan sparseIndex");
-                                byteBuffer=ByteBuffer.allocate(length+Long.BYTES);
-                                if (!bufferRead(byteBuffer, fileChannel))
-                                    throw new CorruptionDetected("Nevalidan sparseIndex");
-                                byte[] key=new byte[length];
-                                byteBuffer.get(key);
-                                long offset=byteBuffer.getLong();
-                                list.add(new IndexEntry(key,offset));
-                            }
+                            x.setBloomFilterPos(bloomPos);
+                            x.setBloomFilterSize(bloomSize);
+                            x.setSparseIndexPos(sparsePos);
+                            x.setSparseIndexSize(sparseSize);
                         }
                     }
                 }
@@ -345,7 +331,7 @@ public class SSTable {
             String filename=String.format("%06d.sst",id);
             Path filePath=sstPath.resolve(Path.of(filename));
             Files.move(sstTmp,filePath, StandardCopyOption.ATOMIC_MOVE);
-            manifest.add(new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),sparseIndex,sparseIndex.size(),bloomFilter));
+            manifest.add(new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length));
             Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
             Files.move(manifestFileTemp.toPath(),manifestFile.toPath(),StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
@@ -354,8 +340,187 @@ public class SSTable {
     }
 
 
-    public void ssTableRead()
+
+
+    public int binarySearch(List<IndexEntry> list,byte[] key)
     {
+        int l=0;
+        int r=list.size()-1;
+        while(l<=r)
+        {
+            int mid=l+(r-l)/2;
+            int comp=Global.compareTo(list.get(mid).getKey(),key);
+            if(comp==0)
+                return mid;
+            if(comp<0)
+            {
+                l=mid+1;
+                continue;
+
+            }
+            r=mid-1;
+        }
+        return r;
+    }
+
+
+
+    public List<IndexEntry> getEntries(FileChannel fileChannel,int size,long start,long end,long thisStart,String txt) throws IOException {
+        if(size<=0)
+            throw new CorruptionDetected("Nevalidan "+txt);
+        List<IndexEntry> list=new ArrayList<>();
+        byte[] oldKey=null;
+        long oldOffset=0;
+        for (int i = 0; i < size; i++) {
+            if (end - fileChannel.position() < Integer.BYTES)
+                throw new CorruptionDetected("Nevalidan "+txt);
+            ByteBuffer byteBuffer = ByteBuffer.allocate(Integer.BYTES);
+            if (!bufferRead(byteBuffer, fileChannel))
+                throw new CorruptionDetected("Nevalidan "+txt);
+            int length = byteBuffer.getInt();
+            if (length<=0 || end - fileChannel.position() < length)
+                throw new CorruptionDetected("Nevalidan "+txt);
+            byteBuffer = ByteBuffer.allocate(length);
+            if (!bufferRead(byteBuffer, fileChannel))
+                throw new CorruptionDetected("Nevalidan "+txt);
+            byte[] key1 = new byte[length];
+            byteBuffer.get(key1);
+            if(oldKey!=null && Global.compareTo(key1,oldKey)<=0)
+            {
+                throw new CorruptionDetected("Nevalidan "+txt);
+            }
+            if(end - fileChannel.position() < Long.BYTES)
+                throw new CorruptionDetected("Nevalidan "+txt);
+            byteBuffer=ByteBuffer.allocate(Long.BYTES);
+            if (!bufferRead(byteBuffer, fileChannel))
+                throw new CorruptionDetected("Nevalidan "+txt);
+            long offset = byteBuffer.getLong();
+            if(oldOffset>=offset)
+                throw new CorruptionDetected("Nevalidan "+txt);
+            if (offset >= thisStart || offset < start)
+                throw new CorruptionDetected("Nevalidan "+txt);
+            list.add(new IndexEntry(key1, offset));
+            oldKey=key1;
+            oldOffset=offset;
+        }
+        return list;
+    }
+
+
+    public byte[] ssTableRead(byte[] key)
+    {
+        for (TableHandle x : manifest.getSet()) {
+            try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
+
+                fileChannel.position(x.getSparseIndexPos());
+                List<IndexEntry> sparseIndex = getEntries(fileChannel,x.getSparseIndexSize(),headerSize,x.getBloomFilterPos(),x.getSparseIndexPos(),"sparseIndex");
+                //todo ovo je nepotrebno ali za svaki slucaj
+                if (fileChannel.position() != x.getBloomFilterPos())
+                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                byte[] bloom = new byte[x.getBloomFilterSize()];
+                ByteBuffer byteBuffer = ByteBuffer.allocate(x.getBloomFilterSize());
+                if (!bufferRead(byteBuffer, fileChannel))
+                    throw new CorruptionDetected("Nevalidan bloom");
+                byteBuffer.get(bloom);
+                if(!readBloom(bloom,key,bloom.length*8) || Global.compareTo(key, x.getMinKey())<0 || Global.compareTo(key,x.getMaxKey())>0)
+                    continue;
+                int index=binarySearch(sparseIndex,key);
+                if(index<0)
+                    continue;
+                IndexEntry indexEntry=sparseIndex.get(index);
+                if(indexEntry.getIndex()<headerSize||indexEntry.getIndex()>=x.getSparseIndexPos())
+                    throw new CorruptionDetected("Nevalidan sst fajl");
+                fileChannel.position(indexEntry.getIndex());
+                long end=(index+1<sparseIndex.size())?sparseIndex.get(index+1).getIndex(): x.getSparseIndexPos();
+                if(end<=indexEntry.getIndex() || end-indexEntry.getIndex()<=Integer.BYTES+Long.BYTES || end-indexEntry.getIndex()>Integer.MAX_VALUE)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                byteBuffer=ByteBuffer.allocate((int)(end-indexEntry.getIndex()));
+                if (!bufferRead(byteBuffer, fileChannel))
+                    throw new CorruptionDetected("Nevalidan sst fajl");
+                byte[] checksum=new byte[byteBuffer.capacity()-Integer.BYTES];
+                byteBuffer.get(checksum);
+                int chs;
+                synchronized (crc32C) {
+                    crc32C.update(checksum, 0, checksum.length);
+                    chs = (int) crc32C.getValue();
+                    crc32C.reset();
+                }
+                if(chs!=byteBuffer.getInt())
+                    throw new CorruptionDetected("Nevalidan checksum");
+                byteBuffer=ByteBuffer.wrap(checksum,checksum.length-Long.BYTES,Long.BYTES);
+                long position=byteBuffer.getLong();
+                if(position<indexEntry.getIndex()||position>=fileChannel.position())
+                    throw new CorruptionDetected("Nevalidan sst fajl");
+
+                fileChannel.position(position);
+                byteBuffer=ByteBuffer.allocate(Integer.BYTES);
+                if (!bufferRead(byteBuffer, fileChannel))
+                    throw new CorruptionDetected("Nevalidan sst fajl");
+                int restartPointsSize=byteBuffer.getInt();
+                List<IndexEntry> checkPoints=getEntries(fileChannel,restartPointsSize,indexEntry.getIndex(),end,position,"checkPoints");
+                if (fileChannel.position() != end-Integer.BYTES-Long.BYTES)
+                    throw new CorruptionDetected("Nevalidan checkPoints");
+                int index1=binarySearch(checkPoints,key);
+                if(index1<0)
+                    continue;
+                IndexEntry found=checkPoints.get(index1);
+                if(Global.compareTo(key, found.getKey())<0)
+                    continue;
+                fileChannel.position(found.getIndex());
+                long end1=(index1+1<checkPoints.size())?checkPoints.get(index1+1).getIndex(): position;
+                while(fileChannel.position()<end1)
+                {
+                    if(end1-fileChannel.position()<=Integer.BYTES)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byteBuffer=ByteBuffer.allocate(Integer.BYTES);
+                    if (!bufferRead(byteBuffer, fileChannel))
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    int keySize=byteBuffer.getInt();
+                    if(keySize<=0 || end1-fileChannel.position()<keySize)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byteBuffer=ByteBuffer.allocate(keySize);
+                    if (!bufferRead(byteBuffer, fileChannel))
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byte[] key1=new byte[keySize];
+                    byteBuffer.get(key1);
+                    if(end1-fileChannel.position()<=Integer.BYTES)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byteBuffer=ByteBuffer.allocate(Integer.BYTES);
+                    if (!bufferRead(byteBuffer, fileChannel))
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    int valueSize=byteBuffer.getInt();
+                    if(valueSize<0 || end1-fileChannel.position()<valueSize)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byte[] value=new byte[valueSize];
+                    if(valueSize!=0)
+                    {
+                        byteBuffer=ByteBuffer.allocate(valueSize);
+                        if (!bufferRead(byteBuffer, fileChannel))
+                            throw new CorruptionDetected("Nevalidan sst fajl");
+                        byteBuffer.get(value);
+                    }
+                    if(end1-fileChannel.position()<Long.BYTES+Byte.BYTES)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    byteBuffer=ByteBuffer.allocate(Long.BYTES+Byte.BYTES);
+                    if (!bufferRead(byteBuffer, fileChannel))
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    long seqNo=byteBuffer.getLong();
+                    byte tombstone=byteBuffer.get();
+                    if(tombstone!=0 && tombstone!=1)
+                        throw new CorruptionDetected("Nevalidan sst fajl (tombstone)");
+                    if(Global.compareTo(key,key1)==0)
+                    {
+                        if(tombstone==1)
+                            throw new NotFound();
+                        return value;
+                    }
+                }
+
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        throw new NotFound();
 
     }
 
@@ -394,9 +559,12 @@ public class SSTable {
         ByteBuffer read=block.asReadOnlyBuffer();
         read.flip();
         read.get(arr);
-        crc32C.update(arr,0,arr.length);
-        int checksum=(int)crc32C.getValue();
-        crc32C.reset();
+        int checksum;
+        synchronized (crc32C) {
+            crc32C.update(arr, 0, arr.length);
+            checksum = (int) crc32C.getValue();
+            crc32C.reset();
+        }
         checksumAndRestartPoints.putInt(checksum);
         checksumAndRestartPoints.flip();
         while(checksumAndRestartPoints.hasRemaining())
@@ -448,7 +616,7 @@ public class SSTable {
                     lsmImplementation.memtableListLock.writeLock().lock();
                     try {
                         lsmImplementation.getMemtables().remove(x);
-                        if (lsmImplementation.getMemtables().size() == config.getMaxImmutableTables()) {
+                        if (lsmImplementation.blockWrite && lsmImplementation.getMemtables().size() == config.getMaxImmutableTables()) {
                             lsmImplementation.conditionMemtableLock.signalAll();
                         }
                     }

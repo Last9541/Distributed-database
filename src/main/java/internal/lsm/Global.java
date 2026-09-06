@@ -11,7 +11,15 @@ import java.nio.file.StandardOpenOption;
 public class Global {
 
 
-
+    public static int compareTo(byte[] arr1,byte[] arr2) {
+        int len=Math.min(arr1.length,arr2.length);
+        for(int i=0;i<len;i++)
+        {
+            if(arr1[i]!=arr2[i])
+                return Byte.compareUnsigned(arr1[i], arr2[i]);
+        }
+        return arr1.length-arr2.length;
+    }
 
 
 }

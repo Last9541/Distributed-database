@@ -114,6 +114,7 @@ public class Main {
                     if (lsm == null)
                         throw new RuntimeException("Moras da pozoves init");
                     lsm.close();
+                    //todo videti da li ostati u beskonacnoj petlji
                     flag=false;
                     break;
                 }
