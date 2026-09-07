@@ -28,7 +28,8 @@ public class IndexEntry {
         this.index = index;
     }
 
-    public int getSize() {
-        return size;
-    }
+      //todo ovo vise nije ispravan size
+//    public int getSize() {
+//        return size;
+//    }
 }

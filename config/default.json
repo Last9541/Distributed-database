@@ -8,7 +8,5 @@
   "log_level": "info",
   "roll_size": 134217728,
   "max_immutable_tables": 4,
-  "bloom_filter_size_per_key": 12,
-  "bloom_hashing_function_number":3,
   "refresh_n": 10
 }

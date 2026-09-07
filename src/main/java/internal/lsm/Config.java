@@ -1,5 +1,7 @@
 package internal.lsm;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 public class Config {
     private String dataDir="./data";
     private int memtableMaxBytes=67108864;
@@ -10,8 +12,10 @@ public class Config {
     private String log_level="info";
     private int rollSize=67108864;
     private int maxImmutableTables=4;
-    private int bloomFilterSizePerKey=12;
-    private int bloomHashingFunctionNumber=3;
+    @JsonIgnore
+    private int bloomFilterSizePerKey;
+    @JsonIgnore
+    private int bloomHashingFunctionNumber;
     private int refreshN=10;
 
     public Config()
@@ -33,18 +37,29 @@ public class Config {
         this.refreshN=refreshN;
     }
 
+
+    public void configGenerateBloomValues()
+    {
+        bloomFilterSizePerKey =(int)Math.ceil(-Math.log(bloomFalsePositive) / Math.pow(Math.log(2), 2));
+        bloomHashingFunctionNumber = (int)Math.round(bloomFilterSizePerKey * Math.log(2));
+    }
+
+    @JsonIgnore
     public int getBloomHashingFunctionNumber() {
         return bloomHashingFunctionNumber;
     }
 
+    @JsonIgnore
     public void setBloomHashingFunctionNumber(int bloomHashingFunctionNumber) {
         this.bloomHashingFunctionNumber = bloomHashingFunctionNumber;
     }
 
+    @JsonIgnore
     public int getBloomFilterSizePerKey() {
         return bloomFilterSizePerKey;
     }
 
+    @JsonIgnore
     public void setBloomFilterSizePerKey(int bloomFilterSizePerKey) {
         this.bloomFilterSizePerKey = bloomFilterSizePerKey;
     }
@@ -103,6 +118,7 @@ public class Config {
 
     public void setBloomFalsePositive(double bloomFalsePositive) {
         this.bloomFalsePositive = bloomFalsePositive;
+        configGenerateBloomValues();
     }
 
     public int getWalFsyncEveryN() {

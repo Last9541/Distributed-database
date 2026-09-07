@@ -342,7 +342,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                 Memtable copy=new Memtable(memtables.getLast());
                 long copySegmentId=segmentId;
                 Main.ssTableWriter.submit(()-> {
-                    ssTableWrite(copy, copySegmentId);
+                    ssTableWrite(copy);
                     walDelete(copySegmentId);
                 });
                 memtables.getLast().getMemtable().clear();
