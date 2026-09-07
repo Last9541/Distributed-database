@@ -6,7 +6,7 @@ import java.util.TreeSet;
 public class Manifest {
 
 
-    private Set<TableHandle> set=new TreeSet<>((a,b)->b.getFileName().compareTo(a.getFileName()));
+    private Set<TableHandle> set=new TreeSet<>();
 
     public Manifest()
     {
@@ -18,9 +18,11 @@ public class Manifest {
         set.add(tableHandle);
     }
 
-    public Set<TableHandle> getSet() {
-        return set;
+    public synchronized Set<TableHandle> getSet() {
+        return new TreeSet<>(set);
     }
 
-
+    public synchronized void setSet(Set<TableHandle> set) {
+        this.set = set;
+    }
 }

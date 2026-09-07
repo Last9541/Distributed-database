@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-public class TableHandle {
+public class TableHandle implements Comparable<TableHandle> {
     private long id;
     private String fileName;
     private byte[] minKey;
@@ -170,5 +170,10 @@ public class TableHandle {
 
     public void setBloomHashingFunctionNumber(int bloomHashingFunctionNumber) {
         this.bloomHashingFunctionNumber = bloomHashingFunctionNumber;
+    }
+
+    @Override
+    public int compareTo(TableHandle o) {
+        return o.fileName.compareTo(this.fileName);
     }
 }

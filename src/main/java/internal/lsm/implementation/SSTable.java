@@ -19,6 +19,8 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.zip.CRC32C;
 
 public class SSTable {
@@ -94,7 +96,8 @@ public class SSTable {
             } else {
                 if(Files.size(manifestFile.toPath())!=0) {
                     manifest = Main.mapper.readValue(manifestFile, Manifest.class);
-                    for (TableHandle x : manifest.getSet()) {
+                    Set<TableHandle> set=manifest.getSet();
+                    for (TableHandle x : set) {
                         //todo sta ako se osnovna putanja promenila
                         try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
                             long size = fileChannel.size();
@@ -173,18 +176,18 @@ public class SSTable {
     {
         int fun1=hashFun1(key,m);
         int fun2=Math.max(1,hashFun2(key,m));
-        for(int i=1;i<=3;i++)
+        for(int i=1;i<=config.getBloomHashingFunctionNumber();i++)
         {
             int index=add(fun1,mul(i,fun2,m),m);
             bloom[index/8]|= (byte) (1<<(index%8));
         }
     }
 
-    private boolean readBloom(byte[] bloom,byte[] key,int m)
+    private boolean readBloom(byte[] bloom,byte[] key,int m,int hashingFunctionNumber)
     {
         int fun1=hashFun1(key,m);
         int fun2=Math.max(1,hashFun2(key,m));
-        for(int i=1;i<=config.getBloomHashingFunctionNumber();i++)
+        for(int i=1;i<=hashingFunctionNumber;i++)
         {
             int index=add(fun1,mul(i,fun2,m),m);
             if((bloom[index/8]&(byte) (1<<(index%8)))==0)
@@ -409,7 +412,8 @@ public class SSTable {
 
     public byte[] ssTableRead(byte[] key)
     {
-        for (TableHandle x : manifest.getSet()) {
+        Set<TableHandle> set=manifest.getSet();
+        for (TableHandle x : set) {
             try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
 
                 fileChannel.position(x.getSparseIndexPos());
@@ -422,7 +426,8 @@ public class SSTable {
                 if (!bufferRead(byteBuffer, fileChannel))
                     throw new CorruptionDetected("Nevalidan bloom");
                 byteBuffer.get(bloom);
-                if(!readBloom(bloom,key,bloom.length*8) || Global.compareTo(key, x.getMinKey())<0 || Global.compareTo(key,x.getMaxKey())>0)
+                //todo sacuvaj i bloom.length*8 u manifestu vrv
+                if(!readBloom(bloom,key,bloom.length*8,x.getBloomHashingFunctionNumber()) || Global.compareTo(key, x.getMinKey())<0 || Global.compareTo(key,x.getMaxKey())>0)
                     continue;
                 int index=binarySearch(sparseIndex,key);
                 if(index<0)
