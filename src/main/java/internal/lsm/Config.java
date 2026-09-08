@@ -17,26 +17,38 @@ public class Config {
     @JsonIgnore
     private int bloomHashingFunctionNumber;
     private int refreshN=10;
+    private int blockCacheMb=64;
+    private boolean cacheIndexBlocks=true;
+    private int maxOpenFiles=1024;
 
     public Config()
     {
 
     }
 
-    public Config(String dataDir, int memtableMaxBytes, int blockSize, double bloomFalsePositive, int walFsyncEveryN, String compression, String log_level,int maxImmutableTables,int bloomFilterSizePerKey,int bloomHashingFunctionNumber,int refreshN) {
-        this.dataDir = dataDir;
-        this.memtableMaxBytes = memtableMaxBytes;
-        this.blockSize = blockSize;
-        this.bloomFalsePositive = bloomFalsePositive;
-        this.walFsyncEveryN = walFsyncEveryN;
-        this.compression = compression;
-        this.log_level = log_level;
-        this.maxImmutableTables=maxImmutableTables;
-        this.bloomFilterSizePerKey=bloomFilterSizePerKey;
-        this.bloomHashingFunctionNumber=bloomHashingFunctionNumber;
-        this.refreshN=refreshN;
+    public int getMaxOpenFiles() {
+        return maxOpenFiles;
     }
 
+    public void setMaxOpenFiles(int maxOpenFiles) {
+        this.maxOpenFiles = maxOpenFiles;
+    }
+
+    public int getBlockCacheMb() {
+        return blockCacheMb;
+    }
+
+    public void setBlockCacheMb(int blockCacheMb) {
+        this.blockCacheMb = blockCacheMb;
+    }
+
+    public boolean isCacheIndexBlocks() {
+        return cacheIndexBlocks;
+    }
+
+    public void setCacheIndexBlocks(boolean cacheIndexBlocks) {
+        this.cacheIndexBlocks = cacheIndexBlocks;
+    }
 
     public void configGenerateBloomValues()
     {

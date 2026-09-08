@@ -1,12 +1,8 @@
 package internal.lsm.implementation.lru;
 
-import internal.lsm.implementation.ByteArray;
-
 import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
 
-public class LruWithSize extends LinkedHashMap<internal.lsm.implementation.lru.LruKey, internal.lsm.implementation.ByteArray> {
+public class LruWithSize extends LinkedHashMap<LruSizeKey, byte[]> {
     private long size;
     private final long maxSize;
     public LruWithSize(long maxSize) {
@@ -15,11 +11,11 @@ public class LruWithSize extends LinkedHashMap<internal.lsm.implementation.lru.L
     }
 
     @Override
-    public ByteArray put(LruKey key, ByteArray value) {
+    public synchronized byte[] put(LruSizeKey key, byte[] value) {
         if(containsKey(key))
-            size-=get(key).getBytes().length;
-        ByteArray val =super.put(key, value);
-        size+=value.getBytes().length;
+            size-=get(key).length;
+        byte[] val =super.put(key, value);
+        size+=value.length;
         while(!isEmpty() && size>maxSize)
         {
              var entry=firstEntry();
@@ -29,16 +25,21 @@ public class LruWithSize extends LinkedHashMap<internal.lsm.implementation.lru.L
     }
 
 
-    public ByteArray myRemove(LruKey key) {
-        ByteArray value=super.remove(key);
+    public synchronized byte[] myRemove(LruSizeKey key) {
+        byte[] value=super.remove(key);
         if(value!=null)
-            size-=value.getBytes().length;
+            size-=value.length;
         return value;
     }
 
     @Override
-    public void clear() {
+    public synchronized void clear() {
         super.clear();
         size=0;
+    }
+
+    @Override
+    public synchronized byte[] get(Object key) {
+        return super.get(key);
     }
 }

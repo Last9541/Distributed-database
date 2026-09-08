@@ -8,5 +8,8 @@
   "log_level": "info",
   "roll_size": 134217728,
   "max_immutable_tables": 4,
-  "refresh_n": 10
+  "refresh_n": 10,
+  "block_cache_mb": 64,
+  "cache_index_blocks": true,
+  "max_open_files": 1024
 }

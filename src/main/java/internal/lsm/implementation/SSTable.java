@@ -9,6 +9,10 @@ import internal.lsm.errors.CorruptionDetected;
 import internal.lsm.errors.IOFailure;
 import internal.lsm.errors.InvalidArgument;
 import internal.lsm.errors.NotFound;
+import internal.lsm.implementation.lru.Lru;
+import internal.lsm.implementation.lru.LruSizeKey;
+import internal.lsm.implementation.lru.LruValue;
+import internal.lsm.implementation.lru.LruWithSize;
 
 import java.io.File;
 import java.io.IOException;
@@ -20,7 +24,6 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.zip.CRC32C;
 
 public class SSTable {
@@ -48,6 +51,10 @@ public class SSTable {
     private int headerSize=8;
 
     private int footerSize=2*Integer.BYTES + 2*Long.BYTES;
+
+    private LruWithSize lruWithSize;
+
+    private Lru lru;
 
     private int add(long a,long b,int m)
     {
@@ -147,6 +154,8 @@ public class SSTable {
         catch (IOException e) {
             throw new RuntimeException(e);
         }
+        lruWithSize=new LruWithSize(config.getBlockCacheMb());
+        lru=new Lru(config.getMaxOpenFiles());
         //deleteSstTmp();
         loadSegmentsId();
     }
@@ -477,39 +486,66 @@ public class SSTable {
     {
         Set<TableHandle> set=manifest.getSet();
         for (TableHandle x : set) {
-            try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
-
-                Index pos= new Index(x.getSparseIndexPos());
-                //fileChannel.position(x.getSparseIndexPos());
-                List<IndexEntry> sparseIndex = getEntries(fileChannel,x.getSparseIndexSize(),headerSize,x.getBloomFilterPos(),x.getSparseIndexPos(),pos,"sparseIndex");
-                //todo ovo je nepotrebno ali za svaki slucaj
-                if (pos.getVal() != x.getBloomFilterPos())
-                    throw new CorruptionDetected("Nevalidan sparseIndex");
-                byte[] bloom = new byte[x.getBloomFilterSize()];
-                ByteBuffer byteBuffer = ByteBuffer.allocate(x.getBloomFilterSize());
-                if (!bufferRead(byteBuffer, fileChannel, pos))
-                    throw new CorruptionDetected("Nevalidan bloom");
-                byteBuffer.get(bloom);
-                //todo sacuvaj i bloom.length*8 u manifestu vrv
-                if(!readBloom(bloom,key,bloom.length*8,x.getBloomHashingFunctionNumber()) || Global.compareTo(key, x.getMinKey())<0 || Global.compareTo(key,x.getMaxKey())>0)
-                    continue;
-                int index=binarySearch(sparseIndex,key);
-                if(index<0)
-                    continue;
-                IndexEntry indexEntry=sparseIndex.get(index);
-                if(indexEntry.getIndex()<headerSize||indexEntry.getIndex()>=x.getSparseIndexPos())
-                    throw new CorruptionDetected("Nevalidan sst fajl");
-                //fileChannel.position(indexEntry.getIndex());
-                pos.setVal(indexEntry.getIndex());
-                long end=(index+1<sparseIndex.size())?sparseIndex.get(index+1).getIndex(): x.getSparseIndexPos();
-                if(end<=indexEntry.getIndex() || end-indexEntry.getIndex()<=2*Integer.BYTES|| end-indexEntry.getIndex()>Integer.MAX_VALUE)
+            try{
+                FileChannel fileChannel=null;
+                LruValue lruValue=lru.get(x.getId());
+                if(lruValue!=null)
+                {
+                    fileChannel=lruValue.getFileChannel();
+                }
+                byte[] fullCapacity=null;
+                try {
+                    if (fileChannel == null || !fileChannel.isOpen()) {
+                        if(fileChannel!=null && lruValue.getLock().isHeldByCurrentThread())
+                            lruValue.getLock().unlock();
+                        fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
+                        lruValue=new LruValue(fileChannel);
+                        lruValue.getLock().lock();
+                        lru.put(x.getId(), lruValue);
+                    }
+                    Index pos = new Index(x.getSparseIndexPos());
+                    //fileChannel.position(x.getSparseIndexPos());
+                    List<IndexEntry> sparseIndex = getEntries(fileChannel, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
+                    //todo ovo je nepotrebno ali za svaki slucaj
+                    if (pos.getVal() != x.getBloomFilterPos())
+                        throw new CorruptionDetected("Nevalidan sparseIndex");
+                    byte[] bloom = new byte[x.getBloomFilterSize()];
+                    ByteBuffer byteBuffer = ByteBuffer.allocate(x.getBloomFilterSize());
+                    if (!bufferRead(byteBuffer, fileChannel, pos))
+                        throw new CorruptionDetected("Nevalidan bloom");
+                    byteBuffer.get(bloom);
+                    //todo sacuvaj i bloom.length*8 u manifestu vrv
+                    if (!readBloom(bloom, key, bloom.length * 8, x.getBloomHashingFunctionNumber()) || Global.compareTo(key, x.getMinKey()) < 0 || Global.compareTo(key, x.getMaxKey()) > 0)
+                        continue;
+                    int index = binarySearch(sparseIndex, key);
+                    if (index < 0)
+                        continue;
+                    IndexEntry indexEntry = sparseIndex.get(index);
+                    if (indexEntry.getIndex() < headerSize || indexEntry.getIndex() >= x.getSparseIndexPos())
                         throw new CorruptionDetected("Nevalidan sst fajl");
-                byteBuffer=ByteBuffer.allocate((int)(end-indexEntry.getIndex()));
-                if (!bufferRead(byteBuffer, fileChannel, pos))
-                    throw new CorruptionDetected("Nevalidan sst fajl");
-                byte[] fullCapacity=new byte[byteBuffer.capacity()];
-                byteBuffer.get(fullCapacity);
-                byteBuffer=ByteBuffer.wrap(fullCapacity);
+                    //fileChannel.position(indexEntry.getIndex());
+                    pos.setVal(indexEntry.getIndex());
+                    long end = (index + 1 < sparseIndex.size()) ? sparseIndex.get(index + 1).getIndex() : x.getSparseIndexPos();
+                    if (end <= indexEntry.getIndex() || end - indexEntry.getIndex() <= 2 * Integer.BYTES || end - indexEntry.getIndex() > Integer.MAX_VALUE)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    LruSizeKey lruSizeKey = new LruSizeKey(x.getId(), pos.getVal());
+                    fullCapacity = lruWithSize.get(lruSizeKey);
+                    if (fullCapacity == null) {
+                        byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
+                        if (!bufferRead(byteBuffer, fileChannel, pos))
+                            throw new CorruptionDetected("Nevalidan sst fajl");
+                        fullCapacity = new byte[byteBuffer.capacity()];
+                        byteBuffer.get(fullCapacity);
+                        lruWithSize.put(lruSizeKey, fullCapacity);
+                    }
+                }
+                finally {
+                    if(lruValue!=null && lruValue.getLock().isHeldByCurrentThread()) {
+                        lruValue.getLock().unlock();
+                    }
+                }
+
+                ByteBuffer byteBuffer=ByteBuffer.wrap(fullCapacity);
                 byte[] checksum=new byte[byteBuffer.capacity()-Integer.BYTES];
                 byteBuffer.get(checksum);
                 int chs;
