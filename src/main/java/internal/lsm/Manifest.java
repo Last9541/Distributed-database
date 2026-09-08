@@ -6,9 +6,9 @@ import java.util.TreeSet;
 public class Manifest {
 
 
-    private int manifestVersion=1;
+    private volatile int manifestVersion=1;
 
-    private int epoch=0;
+    private volatile int epoch=0;
 
     private Set<TableHandle> set=new TreeSet<>();
 
@@ -29,5 +29,21 @@ public class Manifest {
 
     public synchronized void setSet(Set<TableHandle> set) {
         this.set = set;
+    }
+
+    public synchronized int getManifestVersion() {
+        return manifestVersion;
+    }
+
+    public void setManifestVersion(int manifestVersion) {
+        this.manifestVersion = manifestVersion;
+    }
+
+    public synchronized int getEpoch() {
+        return epoch;
+    }
+
+    public void setEpoch(int epoch) {
+        this.epoch = epoch;
     }
 }

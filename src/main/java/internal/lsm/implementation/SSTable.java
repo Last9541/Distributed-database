@@ -24,6 +24,8 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
 
 public class SSTable {
@@ -32,6 +34,9 @@ public class SSTable {
 
 
     Path dataPath;
+
+
+    protected volatile Version version;
 
     private File manifestFile;
 
@@ -44,6 +49,19 @@ public class SSTable {
     private long tempSegmentId=0;
 
     private LsmImplementation lsmImplementation;
+
+    protected volatile Memtable active;
+
+    protected List<Memtable> immutables =new ArrayList<>();
+
+    long immutablesSize=0;
+
+
+    final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
+
+    final Condition conditionMemtableLock=memtableListLock.writeLock().newCondition();
+
+    protected boolean blockWrite;
 
     protected Config config;
 
@@ -159,7 +177,9 @@ public class SSTable {
         catch (IOException e) {
             throw new RuntimeException(e);
         }
-        lruWithSize=new LruWithSize(config.getBlockCacheMb());
+        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()),manifest.getEpoch());
+        if(config.isCacheIndexBlocks())
+            lruWithSize=new LruWithSize(config.getBlockCacheMb());
         lru=new Lru(config.getMaxOpenFiles());
         //deleteSstTmp();
         loadSegmentsId();
@@ -495,10 +515,10 @@ public class SSTable {
     }
 
 
-    public byte[] ssTableRead(byte[] key)
+    public byte[] ssTableRead(byte[] key,Version current)
     {
-        Set<TableHandle> set=manifest.getSet();
-        for (TableHandle x : set) {
+        List<TableHandle> list=current.getTableHandles();
+        for (TableHandle x : list) {
             try{
                 FileChannel fileChannel=null;
                 LruValue lruValue=lru.get(x.getId());
@@ -542,14 +562,16 @@ public class SSTable {
                     if (end <= indexEntry.getIndex() || end - indexEntry.getIndex() <= 2 * Integer.BYTES || end - indexEntry.getIndex() > Integer.MAX_VALUE)
                         throw new CorruptionDetected("Nevalidan sst fajl");
                     LruSizeKey lruSizeKey = new LruSizeKey(x.getId(), pos.getVal());
-                    fullCapacity = lruWithSize.get(lruSizeKey);
+                    if(lruWithSize!=null)
+                        fullCapacity = lruWithSize.get(lruSizeKey);
                     if (fullCapacity == null) {
                         byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
                         if (!bufferRead(byteBuffer, fileChannel, pos))
                             throw new CorruptionDetected("Nevalidan sst fajl");
                         fullCapacity = new byte[byteBuffer.capacity()];
                         byteBuffer.get(fullCapacity);
-                        lruWithSize.put(lruSizeKey, fullCapacity);
+                        if(lruWithSize!=null)
+                            lruWithSize.put(lruSizeKey, fullCapacity);
                     }
                 }
                 finally {
@@ -720,16 +742,17 @@ public class SSTable {
             synchronized (x) {
                 if(!x.isRead()) {
                     ssTableWrite(x);
-                    lsmImplementation.memtableListLock.writeLock().lock();
+                    memtableListLock.writeLock().lock();
                     try {
-                        lsmImplementation.getMemtables().remove(x);
-                        lsmImplementation.immutablesSize-=x.getSize();
-                        if (lsmImplementation.blockWrite && lsmImplementation.getMemtables().size() < config.getMaxImmutableTables()) {
-                            lsmImplementation.conditionMemtableLock.signalAll();
+                        immutables.remove(x);
+                        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()), manifest.getEpoch());
+                        immutablesSize-=x.getSize();
+                        if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
+                            conditionMemtableLock.signalAll();
                         }
                     }
                     finally {
-                        lsmImplementation.memtableListLock.writeLock().unlock();
+                        memtableListLock.writeLock().unlock();
                     }
                     x.setRead(true);
                 }
