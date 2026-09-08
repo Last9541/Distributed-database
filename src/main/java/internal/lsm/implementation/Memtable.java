@@ -9,7 +9,7 @@ public class Memtable {
 
     //todo pocetni i krajni seqno se vrv mogu uzeti iz memtabele
 
-    private long size;
+    private volatile long size;
 
     private boolean immutable;
     private boolean read=false;
@@ -69,7 +69,7 @@ public class Memtable {
         this.size = size;
     }
 
-    public long getSize() {
+    public synchronized long getSize() {
         return size;
     }
 

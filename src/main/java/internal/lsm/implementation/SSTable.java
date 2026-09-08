@@ -30,9 +30,12 @@ public class SSTable {
 
     protected Path sstPath;
 
-    private File manifestFile=new File("data/manifest.json");
 
-    private File manifestFileTemp=new File("data/manifest.json.tmp");
+    Path dataPath;
+
+    private File manifestFile;
+
+    private File manifestFileTemp;
 
     private Manifest manifest=new Manifest();
 
@@ -108,6 +111,8 @@ public class SSTable {
 
     public void init()
     {
+        manifestFile=dataPath.resolve(Path.of("manifest.json")).toFile();
+        manifestFileTemp=dataPath.resolve(Path.of("manifest.json.tmp")).toFile();
         try {
             if (Files.notExists(manifestFile.toPath())) {
                 Files.createFile(manifestFile.toPath());
@@ -366,7 +371,15 @@ public class SSTable {
                 Files.move(sstTmp, filePath);
             }
             manifest.add(new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length));
-            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
+//            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
+            byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
+            try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE)) {
+                ByteBuffer buf = ByteBuffer.wrap(data);
+                while (buf.hasRemaining()) {
+                    ch.write(buf);
+                }
+                ch.force(true);
+            }
             try {
                 Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
             }
@@ -698,7 +711,7 @@ public class SSTable {
         }
     }
 
-    public void ssTableWrite(List<Memtable>copy,long segmentId)
+    public void ssTableWrite(List<Memtable>copy)
     {
 
 
@@ -710,7 +723,8 @@ public class SSTable {
                     lsmImplementation.memtableListLock.writeLock().lock();
                     try {
                         lsmImplementation.getMemtables().remove(x);
-                        if (lsmImplementation.blockWrite && lsmImplementation.getMemtables().size() == config.getMaxImmutableTables()) {
+                        lsmImplementation.immutablesSize-=x.getSize();
+                        if (lsmImplementation.blockWrite && lsmImplementation.getMemtables().size() < config.getMaxImmutableTables()) {
                             lsmImplementation.conditionMemtableLock.signalAll();
                         }
                     }

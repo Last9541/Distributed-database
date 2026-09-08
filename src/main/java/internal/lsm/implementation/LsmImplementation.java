@@ -29,13 +29,13 @@ public class LsmImplementation extends SSTable implements Lsm {
     private CRC32C crc32C=new CRC32C();
 
 
+    private volatile Memtable active;
     private long sequence=1;
     private long segmentId=1;
     private Object walLock=new Object();
     final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
     final Condition conditionMemtableLock=memtableListLock.writeLock().newCondition();
     private FileChannel channel;
-    private Path dataPath;
     private Path walPath;
     private long size;
     private final int headerSize=8;
@@ -47,8 +47,10 @@ public class LsmImplementation extends SSTable implements Lsm {
     private final long keySize=64000;
     private final long valueSize=16777216;
     private final long lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
-    private long immutablesSize=0;
+    long immutablesSize=0;
     private String magic="WAL1";
+    private List<Future<?>> futures=new ArrayList<>();
+    private volatile Exception ssException;
 
     public LsmImplementation(Config config) throws IOException {
         //this.config = config;
@@ -96,7 +98,8 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Premali blockSize u config");
         closed=false;
         this.config=config;
-        memtables.add(new Memtable());
+        //memtables.add(new Memtable());
+        active=new Memtable();
         dataPath=Path.of(config.getDataDir());
         Files.createDirectories(dataPath);
         walPath = dataPath.resolve(Path.of("wal"));
@@ -217,21 +220,36 @@ public class LsmImplementation extends SSTable implements Lsm {
             }
             this.sequence=sequence+1;
             channelInit();
+            for(var x:futures)
+            {
+                x.get();
+            }
+            futures.clear();
         } catch (IOException e) {
             throw new IOFailure();
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
 
     @Override
     public String stats() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+
         //todo dodaj lock ovde
         memtableListLock.readLock().lock();
         try {
-            Memtable memtable = memtables.getLast();
+            //todo prva 3 mogu van locka
+            Memtable memtable = active;
             int activeEntries = memtable.getMemtable().size();
             long activeBytes = memtable.getSize();
-            int immutablesCount = memtables.size() - 1;
+            int immutablesCount = memtables.size();
             long immutablesBytesTotal = immutablesSize;
             long lastSeqNo = sequence - 1;
             return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
@@ -314,73 +332,114 @@ public class LsmImplementation extends SSTable implements Lsm {
 
 
 
+    private void submit(List<Memtable>memtableCopy,boolean delete)
+    {
+        long copySegmentId=segmentId;
+        Main.ssTableWriter.submit(()->
+        {
+            try {
+                ssTableWrite(memtableCopy);
+                if (delete)
+                    walDelete(copySegmentId);
+            }
+            catch (Exception e)
+            {
+                ssException=e;
+                memtableListLock.writeLock().lock();
+                try {
+                    conditionMemtableLock.signalAll();
+                }
+                finally {
+                    memtableListLock.writeLock().unlock();
+                }
+            }
+        });
+    }
 
 
 
     //todo dodaj da memtabela ne sme da predje int_max
     private void memtableWrite(ByteArray byteArray,MemtableEntry memtableEntry,boolean recovery) throws IOFailure, InterruptedException, IOException {
         boolean write=true;
-        while(write && (memtableEntry.getSize() + memtables.getLast().getSize() >= config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE))
+        while(write && (memtableEntry.getSize() + active.getSize() >= config.getMemtableMaxBytes() || active.getMemtable().size() == Integer.MAX_VALUE))
         {
 
 
             //todo obrisati write kao condition i generalno i >= check i ovo ako ne treba da se strogo proverava ?=
-            if(memtableEntry.getSize() + memtables.getLast().getSize() == config.getMemtableMaxBytes() || memtables.getLast().getMemtable().size() == Integer.MAX_VALUE)
+            if(memtableEntry.getSize() + active.getSize() == config.getMemtableMaxBytes() || active.getMemtable().size() == Integer.MAX_VALUE)
             {
-                memtables.getLast().put(byteArray,memtableEntry);
+                active.put(byteArray,memtableEntry);
                 write=false;
             }
             else
             {
                 //todo proveriti da li je IOFailure, takodje za sad je 0 a mozda ce biti nesto drugo ako se doda header
-                if(memtables.getLast().getSize()==0)
+                if(active.getSize()==0)
                     throw new IOFailure();
             }
 
 
-            if(recovery) {
-                Memtable copy=new Memtable(memtables.getLast());
-                long copySegmentId=segmentId;
-                Main.ssTableWriter.submit(()-> {
-                    ssTableWrite(copy);
-                    walDelete(copySegmentId);
-                });
-                memtables.getLast().getMemtable().clear();
-                memtables.getLast().setSize(0);
-            }
-            else {
+            if(!recovery)
+            {
                 channel.force(true);
                 channel.close();
                 segmentId++;
                 channelInit();
-                memtables.getLast().setImmutable(true);
-                immutablesSize+=memtables.getLast().getSize();
-                List<Memtable>memtableCopy=new ArrayList<>(memtables);
-                long copySegmentId=segmentId;
-                Main.ssTableWriter.submit(()->
-                {
-                    ssTableWrite(memtableCopy, copySegmentId);
-                    walDelete(copySegmentId);
-                });
                 if(write)
                     walWrite(memtableEntry.getKey(),memtableEntry.getValue(),memtableEntry.isTombstone()?RecordType.DELETE.value : RecordType.PUT.value);
+            }
+
+            if(recovery || config.getMaxImmutableTables()==0) {
+                Memtable copy=new Memtable(active);
+                long copySegmentId=segmentId;
+                if(recovery) {
+                    futures.add(Main.ssTableWriter.submit(() -> {
+                        ssTableWrite(copy);
+                        walDelete(copySegmentId);
+                    }));
+                }
+                else
+                {
+                    ssTableWrite(copy);
+                    walDelete(copySegmentId);
+                }
+                active.getMemtable().clear();
+                active.setSize(0);
+            }
+            else {
+
+                memtableListLock.readLock().lock();
+                List<Memtable> old=new ArrayList<>(memtables);
+                List<Memtable> new1;
+                memtableListLock.readLock().unlock();
+                if(old.size() >= config.getMaxImmutableTables())
+                {
+                    submit(old,false);
+                }
                 memtableListLock.writeLock().lock();
                 try {
-                    while (memtables.size() > config.getMaxImmutableTables()) {
+                    while (memtables.size() >= config.getMaxImmutableTables() && ssException==null) {
                         blockWrite = true; //todo trenutno mi ovo ne treba jer je write 1 thread al za slucaj da se to ikad promeni
                         conditionMemtableLock.await();
                     }
+                    if (ssException != null)
+                        throw new RuntimeException(ssException);
                     blockWrite=false;
-                    memtables.add(new Memtable());
+                    active.setImmutable(true);
+                    immutablesSize+=active.getSize();
+                    memtables.add(active);
+                    active=new Memtable();
+                    new1=new ArrayList<>(memtables);
                 }
                 finally {
                     memtableListLock.writeLock().unlock();
                 }
+                submit(new1,true);
 
             }
         }
         if(write)
-            memtables.getLast().put(byteArray,memtableEntry);
+            active.put(byteArray,memtableEntry);
     }
 
 
@@ -391,6 +450,8 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if(closed)
             throw new StoreClosed();
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
         if(blockWrite)
             throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
@@ -403,6 +464,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Preveliki key");
         if(valueBytes.length>valueSize)
             throw new InvalidArgument("Preveliki value");
+
 
         //todo provera da li je ostalo dovoljno mesta u fajlu tj da li otvaramo sledeci
         try {
@@ -421,12 +483,25 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if(closed)
             throw new StoreClosed();
+        if(key==null)
+            throw new InvalidArgument("Kljuc ne moze biti null");
+        if(key.length==0)
+            throw new InvalidArgument("Kljuc ne moze biti prazan");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
         //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
+
+        MemtableEntry entry = active.getMemtable().get(new ByteArray(key));
+        if (entry != null) {
+            if (entry.isTombstone())
+                throw new NotFound();
+            return entry.getValue();
+        }
         memtableListLock.readLock().lock();
         try {
             //todo null checkovi ili samo try ako budes lenj
             for (int i = memtables.size() - 1; i >= 0; i--) {
-                MemtableEntry entry = memtables.get(i).getMemtable().get(new ByteArray(key));
+                entry = memtables.get(i).getMemtable().get(new ByteArray(key));
                 if (entry != null) {
                     if (entry.isTombstone())
                         throw new NotFound();
@@ -447,6 +522,8 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if(closed)
             throw new StoreClosed();
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
         if(blockWrite)
             throw new OutOfMemoryError("Presao si limit imutabilnih memtabela");
         if(keyBytes==null)
@@ -455,6 +532,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Kljuc ne moze biti prazan");
         if(keyBytes.length>keySize)
             throw new InvalidArgument("Preveliki key");
+
 
         //todo provera da li je ostalo dovoljno mesta u fajlu tj da li otvaramo sledeci
         try {
@@ -488,6 +566,8 @@ public class LsmImplementation extends SSTable implements Lsm {
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
 
 
     }

@@ -6,6 +6,10 @@ import java.util.TreeSet;
 public class Manifest {
 
 
+    private int manifestVersion=1;
+
+    private int epoch=0;
+
     private Set<TableHandle> set=new TreeSet<>();
 
     public Manifest()
@@ -16,6 +20,7 @@ public class Manifest {
     public synchronized void add(TableHandle tableHandle)
     {
         set.add(tableHandle);
+        epoch++;
     }
 
     public synchronized Set<TableHandle> getSet() {
