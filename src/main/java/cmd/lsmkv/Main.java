@@ -84,8 +84,9 @@ public class Main {
                     if (lsm == null)
                         throw new RuntimeException("Moras da pozoves init");
                     if (arguments.containsKey("key")) {
-                        reader.submit(() -> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
+//                        reader.submit(() -> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
                         //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
+                        System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8))));
                     } else {
                         throw new InvalidArgument();
                     }
@@ -116,6 +117,12 @@ public class Main {
                     lsm.close();
                     //todo videti da li ostati u beskonacnoj petlji
                     flag=false;
+                    break;
+                }
+                case "flush-now":{
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    lsm.flushNow();
                     break;
                 }
             }

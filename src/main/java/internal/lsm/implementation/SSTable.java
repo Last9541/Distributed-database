@@ -42,7 +42,7 @@ public class SSTable {
 
     private File manifestFileTemp;
 
-    private Manifest manifest=new Manifest();
+    protected Manifest manifest=new Manifest();
 
     private long segmentId=0;
 
@@ -177,7 +177,7 @@ public class SSTable {
         catch (IOException e) {
             throw new RuntimeException(e);
         }
-        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()),manifest.getEpoch());
+        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()),manifest.getEpoch(),0,0);
         if(config.isCacheIndexBlocks())
             lruWithSize=new LruWithSize(config.getBlockCacheMb());
         lru=new Lru(config.getMaxOpenFiles());
@@ -250,7 +250,7 @@ public class SSTable {
     }
 
 
-    public void ssTableWrite(Memtable memtable)
+    public TableHandle ssTableWrite(Memtable memtable)
     {
         List<IndexEntry>sparseIndex=new ArrayList<>();
         //todo ovo ako se ne secam nece raditi ali da vidim da li barem pomaze u compile time
@@ -390,7 +390,8 @@ public class SSTable {
             catch (AtomicMoveNotSupportedException e) {
                 Files.move(sstTmp, filePath);
             }
-            manifest.add(new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length));
+            TableHandle tableHandle=new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length);
+            manifest.add(tableHandle);
 //            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
             byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
             try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE)) {
@@ -407,6 +408,7 @@ public class SSTable {
             {
                 Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
+            return tableHandle;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -514,6 +516,80 @@ public class SSTable {
         return list;
     }
 
+
+
+    public void sstInfo(TableHandle x)
+    {
+        try{
+            FileChannel fileChannel=null;
+            LruValue lruValue=lru.get(x.getId());
+            if(lruValue!=null)
+            {
+                fileChannel=lruValue.getFileChannel();
+            }
+
+            try {
+                if (fileChannel == null || !fileChannel.isOpen()) {
+                    if(fileChannel!=null && lruValue.getLock().isHeldByCurrentThread())
+                        lruValue.getLock().unlock();
+                    fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
+                    lruValue=new LruValue(fileChannel);
+                    lruValue.getLock().lock();
+                    lru.put(x.getId(), lruValue);
+                }
+                Index pos = new Index(x.getSparseIndexPos());
+                List<IndexEntry> sparseIndex = getEntries(fileChannel, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
+                if (pos.getVal() != x.getBloomFilterPos())
+                    throw new CorruptionDetected("Nevalidan sparseIndex");
+                System.out.println("block number"+sparseIndex.size());
+                for(int index=0;index<sparseIndex.size();index++)
+                {
+                    byte[] fullCapacity=null;
+                    IndexEntry indexEntry = sparseIndex.get(index);
+                    if (indexEntry.getIndex() < headerSize || indexEntry.getIndex() >= x.getSparseIndexPos())
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    //fileChannel.position(indexEntry.getIndex());
+                    pos.setVal(indexEntry.getIndex());
+                    long end = (index + 1 < sparseIndex.size()) ? sparseIndex.get(index + 1).getIndex() : x.getSparseIndexPos();
+                    if (end <= indexEntry.getIndex() || end - indexEntry.getIndex() <= 2 * Integer.BYTES || end - indexEntry.getIndex() > Integer.MAX_VALUE)
+                        throw new CorruptionDetected("Nevalidan sst fajl");
+                    LruSizeKey lruSizeKey = new LruSizeKey(x.getId(), pos.getVal());
+                    if(lruWithSize!=null)
+                        fullCapacity = lruWithSize.get(lruSizeKey);
+                    if (fullCapacity == null) {
+                        ByteBuffer byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
+                        if (!bufferRead(byteBuffer, fileChannel, pos))
+                            throw new CorruptionDetected("Nevalidan sst fajl");
+                        fullCapacity = new byte[byteBuffer.capacity()];
+                        byteBuffer.get(fullCapacity);
+                        if(lruWithSize!=null)
+                            lruWithSize.put(lruSizeKey, fullCapacity);
+                    }
+                    System.out.println("Velicina bloka:"+fullCapacity.length);
+                    ByteBuffer byteBuffer=ByteBuffer.wrap(fullCapacity);
+                    byte[] checksum=new byte[byteBuffer.capacity()-Integer.BYTES];
+                    byteBuffer.get(checksum);
+                    int chs;
+                    synchronized (crc32C) {
+                        crc32C.update(checksum, 0, checksum.length);
+                        chs = (int) crc32C.getValue();
+                        crc32C.reset();
+                    }
+                    if(chs!=byteBuffer.getInt())
+                        throw new CorruptionDetected("Nevalidan checksum");
+                }
+                System.out.println("Checksum OK");
+
+            }
+            finally {
+                if(lruValue!=null && lruValue.getLock().isHeldByCurrentThread()) {
+                    lruValue.getLock().unlock();
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     public byte[] ssTableRead(byte[] key,Version current)
     {
@@ -733,6 +809,39 @@ public class SSTable {
         }
     }
 
+
+
+    public TableHandle flushNow(List<Memtable>copy)
+    {
+
+
+        for(Memtable x:copy){
+            //todo proveri ovo on a local variable
+            synchronized (x) {
+                if(!x.isRead()) {
+                    TableHandle tableHandle=ssTableWrite(x);
+                    memtableListLock.writeLock().lock();
+                    try {
+                        immutables.remove(x);
+                        immutablesSize-=x.getSize();
+                        Version old=version;
+                        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()), manifest.getEpoch(),immutablesSize,old.getLastSeqNo());
+
+                        if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
+                            conditionMemtableLock.signalAll();
+                        }
+                    }
+                    finally {
+                        memtableListLock.writeLock().unlock();
+                    }
+                    x.setRead(true);
+                    return tableHandle;
+                }
+            }
+        }
+        return null;
+    }
+
     public void ssTableWrite(List<Memtable>copy)
     {
 
@@ -745,8 +854,10 @@ public class SSTable {
                     memtableListLock.writeLock().lock();
                     try {
                         immutables.remove(x);
-                        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()), manifest.getEpoch());
                         immutablesSize-=x.getSize();
+                        Version old=version;
+                        version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(manifest.getSet()), manifest.getEpoch(),immutablesSize,old.getLastSeqNo());
+
                         if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
                             conditionMemtableLock.signalAll();
                         }

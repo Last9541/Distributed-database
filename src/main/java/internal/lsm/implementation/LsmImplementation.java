@@ -1,9 +1,7 @@
 package internal.lsm.implementation;
 
 import cmd.lsmkv.Main;
-import internal.lsm.Config;
-import internal.lsm.Lsm;
-import internal.lsm.RecordType;
+import internal.lsm.*;
 import internal.lsm.errors.*;
 
 import java.io.IOException;
@@ -238,21 +236,15 @@ public class LsmImplementation extends SSTable implements Lsm {
         if(ssException!=null)
             throw new RuntimeException(ssException);
 
-        //todo dodaj lock ovde
-        memtableListLock.readLock().lock();
-        try {
-            //todo prva 3 mogu van locka
-            Memtable memtable = active;
-            int activeEntries = memtable.getMemtable().size();
-            long activeBytes = memtable.getSize();
-            int immutablesCount = immutables.size();
-            long immutablesBytesTotal = immutablesSize;
-            long lastSeqNo = sequence - 1;
-            return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
-        }
-        finally {
-            memtableListLock.readLock().unlock();
-        }
+        Version current=version;
+        Memtable memtable = current.getActive();
+        int activeEntries = memtable.getMemtable().size();
+        long activeBytes = memtable.getSize();
+        int immutablesCount = current.getImmutables().size();
+        long immutablesBytesTotal = current.getImmutableSize();
+        long lastSeqNo = current.getLastSeqNo();
+        return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
+
 
     }
 
@@ -426,7 +418,8 @@ public class LsmImplementation extends SSTable implements Lsm {
                     immutables.add(active);
                     active=new Memtable();
                     new1=new ArrayList<>(immutables);
-                    version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(version.getTableHandles()),version.getEpoch());
+                    Version oldVersion=version;
+                    version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(oldVersion.getTableHandles()),oldVersion.getEpoch(),immutablesSize,sequence-1);
                 }
                 finally {
                     memtableListLock.writeLock().unlock();
@@ -572,5 +565,95 @@ public class LsmImplementation extends SSTable implements Lsm {
 
     List<Memtable> getMemtables() {
         return immutables;
+    }
+
+    @Override
+    public void flushNow() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+        TableHandle tableHandle=super.flushNow(new ArrayList<>(immutables));
+        if(tableHandle==null)
+            System.out.println("Nema immutable");
+        else
+            System.out.println(tableHandle.getId()+" "+tableHandle.getFileSize());
+    }
+
+    @Override
+    public void listSst() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+        Version current=version;
+        for(TableHandle x:current.getTableHandles())
+        {
+            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+        }
+    }
+
+    //todo dodati statistike po bloku
+    @Override
+    public void sstInfo(String fileName) {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+        Version current=version;
+        TableHandle tableHandle=current.getMapTableHandles().get(fileName);
+        if(tableHandle==null) {
+            System.out.println("Ne postoji sst sa ovim fileName");
+            return;
+        }
+        super.sstInfo(tableHandle);
+    }
+
+    @Override
+    public void manifestInfo() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+        Set<TableHandle> set=null;
+        synchronized (manifest)
+        {
+            System.out.println(manifest.getEpoch());
+            set=manifest.getSet();
+        }
+        for(TableHandle x:set)
+        {
+            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+
+        }
+    }
+
+    @Override
+    public void versionInfo() {
+        if(closed)
+            throw new StoreClosed();
+        if(config==null)
+            throw new RuntimeException("Nisi uradio init");
+        if(ssException!=null)
+            throw new RuntimeException(ssException);
+        Version current=version;
+        System.out.println("epoch: "+current.getEpoch());
+        for(Memtable x:current.getImmutables())
+        {
+            System.out.println("size: "+x.getSize());
+        }
+        for(TableHandle x:current.getTableHandles())
+        {
+            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+        }
+
     }
 }

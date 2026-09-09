@@ -35,4 +35,26 @@ public interface Lsm {
         throw new NotImplemented();
     };
 
+    default void flushNow(){
+        throw new NotImplemented();
+    };
+
+    default void listSst() {
+        throw new NotImplemented();
+    }
+
+    default void sstInfo(String fileName) {
+        throw new NotImplemented();
+    }
+
+    default void manifestInfo() {
+        throw new NotImplemented();
+    }
+
+    default void versionInfo() {
+        throw new NotImplemented();
+    }
+
+
+
 }

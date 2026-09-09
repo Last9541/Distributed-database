@@ -2,60 +2,72 @@ package internal.lsm.implementation;
 
 import internal.lsm.TableHandle;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Version {
-    private Memtable active;
-    private List<Memtable> immutables;
-    private List<TableHandle> tableHandles;
-    private volatile int epoch;
-    private AtomicInteger refCount=new AtomicInteger();
+    private final Memtable active;
+    private final List<Memtable> immutables;
+    private final Map<String,TableHandle> mapTableHandles=new HashMap<>();
+    private final List<TableHandle> tableHandles;
+    private final int epoch;
+    private final AtomicInteger refCount=new AtomicInteger();
+    private final long immutableSize;
+    private final long lastSeqNo;
+    //todo versionId
 
-    public Version(Memtable active, List<Memtable> immutables, List<TableHandle> tableHandles, int epoch) {
+    public Version(Memtable active, List<Memtable> immutables, List<TableHandle> tableHandles, int epoch, long immutableSize, long lastSeqNo) {
         this.active = active;
         this.immutables = immutables;
         this.tableHandles = tableHandles;
+        for(TableHandle x:tableHandles)
+        {
+            mapTableHandles.put(x.getFileName(),x);
+        }
         this.epoch = epoch;
+        this.immutableSize = immutableSize;
+        this.lastSeqNo = lastSeqNo;
     }
+
+    public Map<String, TableHandle> getMapTableHandles() {
+        return mapTableHandles;
+    }
+
+    public long getLastSeqNo() {
+        return lastSeqNo;
+    }
+
+
+    public long getImmutableSize() {
+        return immutableSize;
+    }
+
 
     public Memtable getActive() {
         return active;
     }
 
-    public void setActive(Memtable active) {
-        this.active = active;
-    }
 
     public List<Memtable> getImmutables() {
         return immutables;
     }
 
-    public void setImmutables(List<Memtable> immutables) {
-        this.immutables = immutables;
-    }
 
     public List<TableHandle> getTableHandles() {
         return tableHandles;
     }
 
-    public void setTableHandles(List<TableHandle> tableHandles) {
-        this.tableHandles = tableHandles;
-    }
 
     public int getEpoch() {
         return epoch;
     }
 
-    public void setEpoch(int epoch) {
-        this.epoch = epoch;
-    }
+
 
     public AtomicInteger getRefCount() {
         return refCount;
     }
 
-    public void setRefCount(AtomicInteger refCount) {
-        this.refCount = refCount;
-    }
 }
