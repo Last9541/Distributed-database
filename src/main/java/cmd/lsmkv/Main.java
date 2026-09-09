@@ -6,7 +6,9 @@ import internal.lsm.Config;
 import internal.lsm.Global;
 import internal.lsm.Lsm;
 import internal.lsm.errors.InvalidArgument;
+import internal.lsm.implementation.Compaction;
 import internal.lsm.implementation.LsmImplementation;
+import internal.lsm.implementation.SSTable;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -34,6 +36,9 @@ public class Main {
     private static ExecutorService write= Executors.newSingleThreadExecutor();
 
     private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+
+    private static Compaction compaction=new Compaction((SSTable) lsm);
 
     public static void main(String[] args) {
         Scanner scanner=new Scanner(System.in);

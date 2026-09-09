@@ -6,6 +6,7 @@ import internal.lsm.implementation.IndexEntry;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TableHandle implements Comparable<TableHandle> {
     private long id;
@@ -18,6 +19,7 @@ public class TableHandle implements Comparable<TableHandle> {
     private long fileSize;
     private int bloomFilterSizePerKey;
     private int bloomHashingFunctionNumber;
+    private int entryCount;
     @JsonIgnore
     private int sparseIndexSize;
     @JsonIgnore
@@ -26,6 +28,8 @@ public class TableHandle implements Comparable<TableHandle> {
     private long bloomFilterPos;
     @JsonIgnore
     private int bloomFilterSize;
+
+    private AtomicBoolean compaction=new AtomicBoolean(false);
 
 
     public TableHandle()
@@ -36,7 +40,7 @@ public class TableHandle implements Comparable<TableHandle> {
     public TableHandle(long id, String fileName, byte[] minKey,
                        byte[] maxKey, long minSeqNo, long maxSeqNo, Instant createdAt,
                        long fileSize, int bloomFilterSizePerKey, int bloomHashingFunctionNumber,
-                       long sparseIndexPos, int sparseIndexSize,long bloomFilterPos,int bloomFilterSize) {
+                       long sparseIndexPos, int sparseIndexSize,long bloomFilterPos,int bloomFilterSize,int entryCount) {
         this.id = id;
         this.fileName = fileName;
         this.minKey = minKey;
@@ -51,6 +55,19 @@ public class TableHandle implements Comparable<TableHandle> {
         this.sparseIndexSize=sparseIndexSize;
         this.bloomFilterPos=bloomFilterPos;
         this.bloomFilterSize=bloomFilterSize;
+        this.entryCount=entryCount;
+    }
+
+    public AtomicBoolean getCompaction() {
+        return compaction;
+    }
+
+    public int getEntryCount() {
+        return entryCount;
+    }
+
+    public void setEntryCount(int entryCount) {
+        this.entryCount = entryCount;
     }
 
     @JsonIgnore
@@ -172,8 +189,10 @@ public class TableHandle implements Comparable<TableHandle> {
         this.bloomHashingFunctionNumber = bloomHashingFunctionNumber;
     }
 
+
     @Override
     public int compareTo(TableHandle o) {
-        return o.fileName.compareTo(this.fileName);
+        //return o.fileName.compareTo(this.fileName);
+        return Long.compare(o.id,(this.id));
     }
 }

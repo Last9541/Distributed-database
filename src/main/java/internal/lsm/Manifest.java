@@ -1,7 +1,6 @@
 package internal.lsm;
 
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class Manifest {
 
@@ -12,19 +11,34 @@ public class Manifest {
 
     private Set<TableHandle> set=new TreeSet<>();
 
+    private Set<TableHandle> setSize=new TreeSet<>((a,b)->{
+        if(a.getFileSize()==b.getFileSize())
+            return Long.compare(b.getId(),a.getId());
+        return Long.compare(a.getFileSize(),b.getFileSize());
+    });
+
     public Manifest()
     {
 
     }
 
-    public synchronized void add(TableHandle tableHandle)
+    public synchronized Manifest add(TableHandle tableHandle)
     {
         set.add(tableHandle);
+        setSize.add(tableHandle);
         epoch++;
+        Manifest manifest=new Manifest();
+        manifest.set.addAll(set);
+        manifest.setSize.addAll(setSize);
+        return manifest;
     }
 
-    public synchronized Set<TableHandle> getSet() {
-        return new TreeSet<>(set);
+    public List<TableHandle> getSetSize() {
+        return new ArrayList<>(setSize);
+    }
+
+    public synchronized List<TableHandle> getSet() {
+        return new ArrayList<>(set);
     }
 
     public synchronized void setSet(Set<TableHandle> set) {

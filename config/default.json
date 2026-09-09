@@ -11,5 +11,11 @@
   "refresh_n": 10,
   "block_cache_mb": 64,
   "cache_index_blocks": true,
-  "max_open_files": 1024
+  "max_open_files": 1024,
+  "size_tiered_fan_in": 4,
+  "size_tiered_size_ratio": 2.0,
+  "compaction_max_concurrent": 1,
+  "compaction_io_mb_per_s": 0,
+  "l0_compaction_trigger": 8,
+  "l0_stop_writes": 20
 }

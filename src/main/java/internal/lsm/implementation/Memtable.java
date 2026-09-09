@@ -38,7 +38,7 @@ public class Memtable {
 
 
     //todo napisi wrapper za put ako treba da se koristi boolean immutable
-    public void put(ByteArray byteArray,MemtableEntry memtableEntry)
+    public synchronized void put(ByteArray byteArray,MemtableEntry memtableEntry)
     {
         if(immutable)
             throw new RuntimeException("NAPRAVI NOVI EXCEPTION ZA OVO POSLE");

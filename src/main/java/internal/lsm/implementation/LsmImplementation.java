@@ -88,6 +88,8 @@ public class LsmImplementation extends SSTable implements Lsm {
 
 
     public void init(Config config) throws IOException {
+        if(this.config!=null)
+            throw new InvalidArgument("Vec je uradjen init, moras ponovo");
         if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize || config.getBlockSize()<config.getMemtableMaxBytes())
             throw new InvalidArgument("Premali blockSize u config");
         closed=false;
@@ -238,8 +240,12 @@ public class LsmImplementation extends SSTable implements Lsm {
 
         Version current=version;
         Memtable memtable = current.getActive();
-        int activeEntries = memtable.getMemtable().size();
-        long activeBytes = memtable.getSize();
+        int activeEntries;
+        long activeBytes;
+        synchronized (memtable) {
+            activeEntries = memtable.getMemtable().size();
+            activeBytes = memtable.getSize();
+        }
         int immutablesCount = current.getImmutables().size();
         long immutablesBytesTotal = current.getImmutableSize();
         long lastSeqNo = current.getLastSeqNo();
@@ -419,7 +425,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                     active=new Memtable();
                     new1=new ArrayList<>(immutables);
                     Version oldVersion=version;
-                    version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(oldVersion.getTableHandles()),oldVersion.getEpoch(),immutablesSize,sequence-1);
+                    version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(oldVersion.getTableHandles()),new ArrayList<>(oldVersion.getTableHandlesBySize()),oldVersion.getEpoch(),immutablesSize,sequence-1);
                 }
                 finally {
                     memtableListLock.writeLock().unlock();
@@ -597,7 +603,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
     }
 
-    //todo dodati statistike po bloku
+    //todo dodati statistike po bloku i  jos neki info iz  handle
     @Override
     public void sstInfo(String fileName) {
         if(closed)
@@ -623,7 +629,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if(ssException!=null)
             throw new RuntimeException(ssException);
-        Set<TableHandle> set=null;
+        List<TableHandle> set=null;
         synchronized (manifest)
         {
             System.out.println(manifest.getEpoch());

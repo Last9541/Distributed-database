@@ -20,10 +20,45 @@ public class Config {
     private int blockCacheMb=64;
     private boolean cacheIndexBlocks=true;
     private int maxOpenFiles=1024;
+    private int sizeTieredFanIn=4;
+    private float sizeTieredSizeRatio=2.0f;
+    private int tombstoneGraceSeconds=86400;
+    private int compactionMaxConcurrent=1;
+    private int compactionIoMbPerS=0;
+    private int l0CompactionTrigger=8;
+    private int l0StopWrites=20;
 
     public Config()
     {
 
+    }
+
+    public int getSizeTieredFanIn() {
+        return sizeTieredFanIn;
+    }
+
+    public float getSizeTieredSizeRatio() {
+        return sizeTieredSizeRatio;
+    }
+
+    public int getTombstoneGraceSeconds() {
+        return tombstoneGraceSeconds;
+    }
+
+    public int getCompactionMaxConcurrent() {
+        return compactionMaxConcurrent;
+    }
+
+    public int getCompactionIoMbPerS() {
+        return compactionIoMbPerS;
+    }
+
+    public int getL0CompactionTrigger() {
+        return l0CompactionTrigger;
+    }
+
+    public int getL0StopWrites() {
+        return l0StopWrites;
     }
 
     public int getMaxOpenFiles() {

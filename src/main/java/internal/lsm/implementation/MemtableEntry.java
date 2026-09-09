@@ -1,9 +1,11 @@
 package internal.lsm.implementation;
 
+import internal.lsm.Global;
+
 import java.util.Arrays;
 
 //todo da li treba da se racuna i velicina samog pokazivaca za key i value (pointer size)
-public class MemtableEntry {
+public class MemtableEntry implements Comparable<MemtableEntry> {
     private byte[] key=new byte[0];
     private byte[] value=new byte[0];
     private long seqNo;
@@ -58,5 +60,15 @@ public class MemtableEntry {
 
     public long getSize() {
         return size;
+    }
+
+    @Override
+    public int compareTo(MemtableEntry o) {
+        int val=Global.compareTo(key,o.key);
+        if(val==0)
+        {
+            return Long.compare(o.seqNo,seqNo);
+        }
+        return val;
     }
 }
