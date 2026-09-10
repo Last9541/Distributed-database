@@ -23,6 +23,8 @@ public class LruValue {
 
     public synchronized void increment()
     {
+        if (refCount <= 0)
+            throw new IllegalStateException("Invalid refCount");
         refCount++;
     }
     public synchronized void decrement()
