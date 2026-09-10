@@ -15,17 +15,19 @@ public class Version {
     private final Map<String,TableHandle> mapTableHandles=new HashMap<>();
     private final List<TableHandle> tableHandles;
     private final List<TableHandle> tableHandlesBySize;
+    private final List<TableHandle> tableHandlesByLevel;
     private final int epoch;
     private int refCount=1;
     private final long immutableSize;
     private final long lastSeqNo;
     //todo versionId
 
-    public Version(Memtable active, List<Memtable> immutables, List<TableHandle> tableHandles,List<TableHandle>tableHandlesBySize, int epoch, long immutableSize, long lastSeqNo) {
+    public Version(Memtable active, List<Memtable> immutables, List<TableHandle> tableHandles, List<TableHandle>tableHandlesBySize, List<TableHandle> tableHandlesByLevel, int epoch, long immutableSize, long lastSeqNo) {
         this.active = active;
         this.immutables = immutables;
         this.tableHandles = tableHandles;
         this.tableHandlesBySize=tableHandlesBySize;
+        this.tableHandlesByLevel = tableHandlesByLevel;
         for(TableHandle x:tableHandles)
         {
             x.increment();
@@ -34,6 +36,11 @@ public class Version {
         this.epoch = epoch;
         this.immutableSize = immutableSize;
         this.lastSeqNo = lastSeqNo;
+    }
+
+
+    public List<TableHandle> getTableHandlesByLevel() {
+        return tableHandlesByLevel;
     }
 
     public List<TableHandle> getTableHandlesBySize() {

@@ -92,6 +92,8 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("Vec je uradjen init, moras ponovo");
         if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize || config.getBlockSize()<config.getMemtableMaxBytes())
             throw new InvalidArgument("Premali blockSize u config");
+        if(config.getL0CompactionTrigger()<=0)
+            throw new InvalidArgument("l0compactiontrigger mora biti veci od 0");
         closed=false;
         this.config=config;
         //memtables.add(new Memtable());
@@ -220,7 +222,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             {
                 x.get();
             }
-            version=new Version(active,new ArrayList<>(immutables.reversed()),manifest.getSet(),manifest.getSetSize(),manifest.getEpoch(),0,sequence);
+            version=new Version(active,new ArrayList<>(immutables.reversed()),manifest.getSet(),manifest.getSetSize(),manifest.getSetLevel(),manifest.getEpoch(),0,sequence);
             futures.clear();
         } catch (IOException e) {
             throw new IOFailure();
@@ -249,7 +251,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
         int immutablesCount = current.getImmutables().size();
         long immutablesBytesTotal = current.getImmutableSize();
-        long lastSeqNo = current.getLastSeqNo();
+        long lastSeqNo = sequence-1;
         return String.format("%d %d %d %d %d", activeEntries, activeBytes, immutablesCount, immutablesBytesTotal, lastSeqNo);
     }
 
@@ -387,17 +389,39 @@ public class LsmImplementation extends SSTable implements Lsm {
                 long copySegmentId=segmentId;
                 if(recovery) {
                     futures.add(Main.ssTableWriter.submit(() -> {
-                        ssTableWrite(copy);
+                        try {
+                            manifestWrite(manifest.add(ssTableWrite(copy)));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
                         walDelete(copySegmentId);
                     }));
+                    active.getMemtable().clear();
+                    active.setSize(0);
                 }
                 else
                 {
-                    ssTableWrite(copy);
+                    synchronized (Global.manifestLock) {
+                        try {
+                            Manifest manifest1 = manifest.add(ssTableWrite(copy));
+                            manifestWrite(manifest1);
+                            active=new Memtable();
+                            synchronized (Global.versionLock) {
+                                Version old = version;
+                                //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
+                                //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
+                                version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, sequence);
+                                old.decrement();
+                            }
+                        }
+                        catch (IOException ioException)
+                        {
+                            throw new RuntimeException(ioException);
+                        }
+                    }
                     walDelete(copySegmentId);
+
                 }
-                active.getMemtable().clear();
-                active.setSize(0);
             }
             else {
 
@@ -425,7 +449,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                     new1=new ArrayList<>(immutables);
                     synchronized (Global.versionLock) {
                         Version oldVersion = version;
-                        version = new Version(active, new ArrayList<>(immutables.reversed()), new ArrayList<>(oldVersion.getTableHandles()), new ArrayList<>(oldVersion.getTableHandlesBySize()), oldVersion.getEpoch(), immutablesSize, sequence - 1);
+                        version = new Version(active, new ArrayList<>(immutables.reversed()), new ArrayList<>(oldVersion.getTableHandles()), new ArrayList<>(oldVersion.getTableHandlesBySize()), new ArrayList<>(oldVersion.getTableHandlesByLevel()),oldVersion.getEpoch(), immutablesSize, sequence);
                         oldVersion.decrement();
                     }
                 }

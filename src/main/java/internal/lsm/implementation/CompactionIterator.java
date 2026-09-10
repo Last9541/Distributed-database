@@ -20,13 +20,17 @@ public class CompactionIterator implements Comparable<CompactionIterator> {
     private TableHandle tableHandle;
     private MemtableEntry memtableEntry;
     private SSTable ssTable;
+    private long startTime;
+    private Index writtenSize;
 
-    public CompactionIterator(List<IndexEntry> sparseIndex, ByteBuffer block, FileChannel fileChannel,TableHandle tableHandle,SSTable ssTable) {
+    public CompactionIterator(List<IndexEntry> sparseIndex, ByteBuffer block, FileChannel fileChannel,TableHandle tableHandle,SSTable ssTable,long startTime,Index writtenSize) {
         this.sparseIndex = sparseIndex;
         this.block = block;
         this.fileChannel = fileChannel;
         this.tableHandle=tableHandle;
         this.ssTable=ssTable;
+        this.startTime=startTime;
+        this.writtenSize=writtenSize;
     }
 
 
@@ -35,7 +39,7 @@ public class CompactionIterator implements Comparable<CompactionIterator> {
     }
 
 
-    public boolean nextEntry() throws IOException {
+    public boolean nextEntry() throws IOException, InterruptedException {
         if(block.position()==block.limit())
         {
             if(!next())
@@ -69,7 +73,7 @@ public class CompactionIterator implements Comparable<CompactionIterator> {
         return true;
     }
 
-    public boolean next() throws IOException {
+    public boolean next() throws IOException, InterruptedException {
         Index pos=new Index(0);
         byte[] fullCapacity = null;
         cur++;
@@ -91,6 +95,15 @@ public class CompactionIterator implements Comparable<CompactionIterator> {
             byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
             if (!ssTable.bufferRead(byteBuffer, fileChannel, pos))
                 throw new CorruptionDetected("Nevalidan sst fajl");
+            writtenSize.setVal(writtenSize.getVal()+byteBuffer.limit());
+            if(ssTable.config.getCompactionIoMbPerS()>0) {
+                long cur = System.currentTimeMillis();
+                long requiredTimeMs = writtenSize.getVal() * 1000L / (ssTable.config.getCompactionIoMbPerS() * 1024L * 1024L);
+                long sleepTime = requiredTimeMs - (cur - startTime);
+                if (sleepTime > 0)
+                    Thread.sleep(sleepTime);
+            }
+
             fullCapacity = new byte[byteBuffer.capacity()];
             byteBuffer.get(fullCapacity);
             //todo radim get ali ne i put

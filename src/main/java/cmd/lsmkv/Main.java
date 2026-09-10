@@ -38,7 +38,7 @@ public class Main {
     private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
 
-    private static Compaction compaction=new Compaction((SSTable) lsm);
+    public static Compaction compaction=new Compaction((SSTable) lsm);
 
     public static void main(String[] args) {
         Scanner scanner=new Scanner(System.in);

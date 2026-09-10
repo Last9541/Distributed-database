@@ -30,13 +30,13 @@ public class Compaction {
 
 
 
-    public boolean group(Version current,int start,int end)
+    public boolean group(Version current,int start,int end,List<TableHandle> tableHandles)
     {
         boolean proceed=true;
         int i=start;
         try {
             for (; i <= end; i++) {
-                TableHandle tableHandle = current.getTableHandlesBySize().get(i);
+                TableHandle tableHandle = tableHandles.get(i);
                 if (!tableHandle.getCompaction().compareAndSet(false, true)) {
                     proceed = false;
                     break;
@@ -44,7 +44,7 @@ public class Compaction {
             }
             if (proceed) {
                 try {
-                    lsmImplementation.ssTableCompact(current, start, end);
+                    lsmImplementation.ssTableCompact(current,tableHandles, start, end);
                     return true;
                 } catch (InvalidArgument ignored) {
 
@@ -53,7 +53,7 @@ public class Compaction {
         }
         finally {
             for (int j = start; j < i; j++) {
-                TableHandle tableHandle = current.getTableHandlesBySize().get(j);
+                TableHandle tableHandle = tableHandles.get(j);
                 tableHandle.getCompaction().set(false);
             }
         }
@@ -73,11 +73,11 @@ public class Compaction {
                 if (val > 2)
                     continue;
                 b = false;
-                if (group(current, i, k))
+                if (group(current, i, k,current.getTableHandlesBySize()))
                     return;
             }
-            if (b && lsmImplementation.config.getSizeTieredFanIn() - 1 < current.getTableHandlesBySize().size())
-                group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1);
+            if (b && lsmImplementation.config.getSizeTieredFanIn() - 1 < current.getTableHandlesByLevel().size())
+                group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1,current.getTableHandlesByLevel());
         }
         finally {
             current.decrement();

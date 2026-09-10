@@ -257,7 +257,7 @@ public class SSTable {
         lsmImplementation=(LsmImplementation) this;
     }
 
-    private int fillList(int start,int finish,List<TableHandle>list,List<LruValue>lruValueList,List<CompactionIterator>compactionIterators) throws IOException {
+    private int fillList(int start,int finish,List<TableHandle>list,List<LruValue>lruValueList,List<CompactionIterator>compactionIterators,long startTime,Index writtenSize) throws IOException, InterruptedException {
         long sum=0;
         for (int i=start;i<=finish;i++) {
             TableHandle x=list.get(i);
@@ -297,6 +297,7 @@ public class SSTable {
                 byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
                 if (!bufferRead(byteBuffer, fileChannel1, pos))
                     throw new CorruptionDetected("Nevalidan sst fajl");
+                rateLimiter(byteBuffer.limit(), startTime, writtenSize);
                 fullCapacity = new byte[byteBuffer.capacity()];
                 byteBuffer.get(fullCapacity);
                 //todo radim get ali ne i put
@@ -320,7 +321,7 @@ public class SSTable {
                 throw new CorruptionDetected("Nevalidan sst fajl");
             byte[] needed=new byte[position];
             ByteBuffer.wrap(checksum).get(needed);
-            compactionIterators.add(new CompactionIterator(sparseIndex,ByteBuffer.wrap(needed),fileChannel1,x,this));
+            compactionIterators.add(new CompactionIterator(sparseIndex,ByteBuffer.wrap(needed),fileChannel1,x,this,startTime,writtenSize));
             sum+=x.getEntryCount();
             if(sum>Integer.MAX_VALUE)
                 throw new InvalidArgument("Ove tabele ne mogu da se spoje");
@@ -328,10 +329,10 @@ public class SSTable {
         return (int)sum;
     }
 
-    public void ssTableCompact(Version current,int start,int finish)
+    public void ssTableCompact(Version current,List<TableHandle>list,int start,int finish)
     {
-
-        List<TableHandle> list=current.getTableHandlesBySize();
+        long startTime=System.currentTimeMillis();
+        Index writtenSize=new Index(0);
         List<LruValue> lruValueList=new ArrayList<>();
         List<CompactionIterator> compactionIterators=new ArrayList<>();
         Path sstTmp=sstPath.resolve(Path.of(String.format("%06d.sst.tmp", tempSegmentIncrementAndGet())));
@@ -345,7 +346,7 @@ public class SSTable {
             {
                 fileChannel.write(record);
             }
-            int sumCount=fillList(start,finish,list,lruValueList,compactionIterators);
+            int sumCount=fillList(start,finish,list,lruValueList,compactionIterators,startTime,writtenSize);
             long val=(long)config.getBloomFilterSizePerKey()*sumCount/8;
             if(val>Integer.MAX_VALUE)
                 throw new InvalidArgument("Los bloomFalsePositive");
@@ -383,7 +384,7 @@ public class SSTable {
                     if (minKey == null)
                         minKey = memtableEntry.getKey();
                     maxKey = memtableEntry.getKey();
-                    block=entryWrite(minSeqNo, maxSeqNo, count, restartSize, memtableEntry, bloomFilter, block, fileChannel, sparseIndex, restartPoints);
+                    block=entryWrite(minSeqNo, maxSeqNo, count, restartSize, memtableEntry, bloomFilter, block, fileChannel, sparseIndex, restartPoints,startTime,writtenSize);
                     previous=byteArray;
                     entryCount++;
                 }
@@ -395,9 +396,15 @@ public class SSTable {
             {
                 filtered.add(list.get(i));
             }
+            if(block.remaining()!=0) {
+                blockWrite(fileChannel, block, restartPoints, sparseIndex.getLast().getIndex());
+                rateLimiter(block.position() + Integer.BYTES, startTime, writtenSize);
+            }
+            long pos=fileChannel.position();
             indexesWrite(minKey,maxKey,minSeqNo.getVal(),maxSeqNo.getVal(),entryCount,sstTmp,block,fileChannel,bloomFilter,sparseIndex,restartPoints,filtered);
+            rateLimiter(fileChannel.position()-pos, startTime, writtenSize);
         }
-        catch (IOException e) {
+        catch (IOException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
             for(LruValue lruValue:lruValueList) {
@@ -407,7 +414,7 @@ public class SSTable {
     }
 
 
-    public ByteBuffer entryWrite(Index minSeqNo,Index maxSeqNo,Index count,Index restartSize,MemtableEntry memtableEntry,byte[] bloomFilter,ByteBuffer block,FileChannel fileChannel,List<IndexEntry>sparseIndex,List<IndexEntry> restartPoints) throws IOException {
+    public ByteBuffer entryWrite(Index minSeqNo,Index maxSeqNo,Index count,Index restartSize,MemtableEntry memtableEntry,byte[] bloomFilter,ByteBuffer block,FileChannel fileChannel,List<IndexEntry>sparseIndex,List<IndexEntry> restartPoints,long startTime,Index writtenSize) throws IOException, InterruptedException {
         if(memtableEntry.getSeqNo()>maxSeqNo.getVal())
             maxSeqNo.setVal(memtableEntry.getSeqNo());
         if(memtableEntry.getSeqNo()<minSeqNo.getVal())
@@ -427,6 +434,7 @@ public class SSTable {
             if(block.remaining()!=0)
             {
                 blockWrite(fileChannel, block, restartPoints,sparseIndex.getLast().getIndex());
+                rateLimiter(block.position() + Integer.BYTES, startTime, writtenSize);
             }
             restartPoints.clear();
             restartSize.setVal(0);
@@ -463,9 +471,20 @@ public class SSTable {
         count.setVal(count.getVal()+1);
         return block;
     }
+
+    private void rateLimiter(long size, long startTime, Index writtenSize) throws InterruptedException {
+        if(config.getCompactionIoMbPerS()<=0)
+            return;
+        writtenSize.setVal(writtenSize.getVal()+size);
+        long cur = System.currentTimeMillis();
+        long requiredTimeMs = writtenSize.getVal()*1000L/(config.getCompactionIoMbPerS()*1024L*1024L);
+        long sleepTime = requiredTimeMs - (cur - startTime);
+        if (sleepTime > 0)
+            Thread.sleep(sleepTime);
+    }
+
     public void indexesWrite(byte[] minKey,byte[] maxKey,long minSeqNo,long maxSeqNo,int size,Path sstTmp,ByteBuffer block,FileChannel fileChannel,byte[] bloomFilter,List<IndexEntry>sparseIndex,List<IndexEntry>restartPoints,List<TableHandle>remove) throws IOException {
-        if(block.remaining()!=0)
-            blockWrite(fileChannel, block, restartPoints,sparseIndex.getLast().getIndex());
+
         long pos=fileChannel.position();
         for(IndexEntry sparseIndexEntry:sparseIndex)
         {
@@ -511,11 +530,22 @@ public class SSTable {
         }
         TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size,this);
 
-        Manifest manifest1=manifest.addAndRemove(tableHandle,remove);
+        synchronized (Global.manifestLock) {
+            Manifest manifest1 = manifest.addAndRemove(tableHandle, remove);
 
 //            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
-        byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
-        try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE)) {
+            manifestWrite(manifest1);
+            synchronized (Global.versionLock) {
+                Version old = version;
+                version = new Version(old.getActive(), old.getImmutables(), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), old.getImmutableSize(), old.getLastSeqNo());
+                old.decrement();
+            }
+        }
+    }
+
+    public void manifestWrite(Manifest manifest1) throws IOException {
+        byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest1);
+        try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
             ByteBuffer buf = ByteBuffer.wrap(data);
             while (buf.hasRemaining()) {
                 ch.write(buf);
@@ -524,20 +554,13 @@ public class SSTable {
         }
         try {
             Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
-        }
-        catch (AtomicMoveNotSupportedException e)
-        {
+        } catch (AtomicMoveNotSupportedException e) {
             Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        }
-        synchronized (Global.versionLock) {
-            Version old = version;
-            version = new Version(old.getActive(), old.getImmutables(), manifest1.getSet(), manifest1.getSetSize(), manifest1.getEpoch(), old.getImmutableSize(), old.getLastSeqNo());
-            old.decrement();
         }
     }
 
 
-    public SSWriteOutput ssTableWrite(Memtable memtable)
+    public TableHandle ssTableWrite(Memtable memtable)
     {
         List<IndexEntry>sparseIndex=new ArrayList<>();
         //todo ovo ako se ne secam nece raditi ali da vidim da li barem pomaze u compile time
@@ -677,25 +700,7 @@ public class SSTable {
             catch (AtomicMoveNotSupportedException e) {
                 Files.move(sstTmp, filePath);
             }
-            TableHandle tableHandle=new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size(),this);
-            SSWriteOutput ssWriteOutput=new SSWriteOutput(manifest.add(tableHandle),tableHandle);
-//            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
-            byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
-            try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE)) {
-                ByteBuffer buf = ByteBuffer.wrap(data);
-                while (buf.hasRemaining()) {
-                    ch.write(buf);
-                }
-                ch.force(true);
-            }
-            try {
-                Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
-            }
-            catch (AtomicMoveNotSupportedException e)
-            {
-                Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-            return ssWriteOutput;
+            return new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size(), this);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -1061,13 +1066,20 @@ public class SSTable {
     public void loadSegmentsId()
     {
         try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(sstPath)) {
+            Set<TableHandle> hashSet=new HashSet<>(manifest.getSet());
             for(Path file:filesStream)
             {
                 try {
                     String name = file.getFileName().toString();
                     if (Files.isRegularFile(file) && name.contains(".")) {
                         if (name.substring(name.indexOf('.')).equals(".sst")) {
-                            segmentId = Math.max(segmentId, Long.parseLong(name.substring(0, name.indexOf('.'))));
+                            long num=Long.parseLong(name.substring(0, name.indexOf('.')));
+                            if(!hashSet.contains(new TableHandle(num)))
+                            {
+                                Files.deleteIfExists(file);
+                            }
+                            else
+                                segmentId = Math.max(segmentId,num);
 
                         } else {
                             if (name.substring(name.indexOf('.')).equals(".sst.tmp")) {
@@ -1097,28 +1109,55 @@ public class SSTable {
 
         for(Memtable x:copy){
             //todo proveri ovo on a local variable
-            synchronized (x) {
-                if(!x.isRead()) {
-                    SSWriteOutput ssWriteOutput=ssTableWrite(x);
-                    memtableListLock.writeLock().lock();
-                    try {
-                        immutables.remove(x);
-                        immutablesSize-=x.getSize();
-                        synchronized (Global.versionLock) {
-                            Version old = version;
-                            version = new Version(active, new ArrayList<>(immutables.reversed()), ssWriteOutput.getManifest().getSet(), ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(), immutablesSize, old.getLastSeqNo());
-                            old.decrement();
+            Version ver=null;
+            try {
+                TableHandle ssWriteOutput=null;
+                synchronized (x) {
+                    if (!x.isRead()) {
+                        ssWriteOutput = ssTableWrite(x);
+                        memtableListLock.writeLock().lock();
+                        try {
+                            immutables.remove(x);
+                            immutablesSize -= x.getSize();
+                            synchronized (Global.manifestLock) {
+                                try {
+                                    Manifest manifest1 = manifest.add(ssWriteOutput);
+                                    manifestWrite(manifest1);
+                                    synchronized (Global.versionLock) {
+                                        Version old = version;
+                                        //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
+                                        //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
+                                        version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, old.getLastSeqNo());
+                                        old.decrement();
+                                        ver = acquireVersion();
+                                    }
+                                }
+                                catch (IOException ioException)
+                                {
+                                    throw  new RuntimeException(ioException);
+                                }
+                            }
+                            if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
+                                conditionMemtableLock.signalAll();
+                            }
                         }
-                        if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
-                            conditionMemtableLock.signalAll();
+                        finally {
+                            memtableListLock.writeLock().unlock();
                         }
+                        x.setRead(true);
                     }
-                    finally {
-                        memtableListLock.writeLock().unlock();
-                    }
-                    x.setRead(true);
-                    return ssWriteOutput.getTableHandle();
                 }
+                if (ver != null) {
+                    //todo proveriti sta da se vrati u ovom slucaju
+                    List<TableHandle> check = ver.getTableHandlesByLevel();
+                    if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
+                        Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
+                    return ssWriteOutput;
+                }
+            }
+            finally {
+                if(ver!=null)
+                    ver.decrement();
             }
         }
         return null;
@@ -1131,29 +1170,55 @@ public class SSTable {
         for(Memtable x:copy){
             //todo proveri ovo on a local variable
             //todo prebaci na atomic boolean i cas
-            synchronized (x) {
-                if(!x.isRead()) {
-                    SSWriteOutput ssWriteOutput=ssTableWrite(x);
-                    memtableListLock.writeLock().lock();
-                    try {
-                        immutables.remove(x);
-                        immutablesSize-=x.getSize();
-                        synchronized (Global.versionLock) {
-                            Version old = version;
-                            //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
-                            //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
-                            version = new Version(active, new ArrayList<>(immutables.reversed()), ssWriteOutput.getManifest().getSet(), ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(), immutablesSize, old.getLastSeqNo());
-                            old.decrement();
+
+
+            Version ver = null;
+            try {
+                synchronized (x) {
+                    if (!x.isRead()) {
+                       TableHandle ssWriteOutput=ssTableWrite(x);
+                        memtableListLock.writeLock().lock();
+                        try {
+                            immutables.remove(x);
+                            immutablesSize -= x.getSize();
+                            synchronized (Global.manifestLock) {
+                                try {
+                                    Manifest manifest1 = manifest.add(ssWriteOutput);
+                                    manifestWrite(manifest1);
+                                    synchronized (Global.versionLock) {
+                                        Version old = version;
+                                        //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
+                                        //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
+                                        version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, old.getLastSeqNo());
+                                        old.decrement();
+                                        ver = acquireVersion();
+                                    }
+                                }
+                                catch (IOException ioException)
+                                {
+                                    throw new RuntimeException(ioException);
+                                }
+                            }
+                            if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
+                                conditionMemtableLock.signalAll();
+                            }
                         }
-                        if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
-                            conditionMemtableLock.signalAll();
+
+                        finally {
+                            memtableListLock.writeLock().unlock();
                         }
+                        x.setRead(true);
                     }
-                    finally {
-                        memtableListLock.writeLock().unlock();
-                    }
-                    x.setRead(true);
                 }
+                if (ver != null) {
+                    List<TableHandle> check = ver.getTableHandlesByLevel();
+                    if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
+                        Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
+                }
+            }
+            finally {
+                if(ver!=null)
+                    ver.decrement();
             }
         }
     }

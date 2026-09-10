@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TableHandle implements Comparable<TableHandle> {
@@ -33,6 +34,8 @@ public class TableHandle implements Comparable<TableHandle> {
     @JsonIgnore
     private int bloomFilterSize;
 
+    private int level=0;
+
     @JsonIgnore
     private AtomicBoolean compaction=new AtomicBoolean(false);
 
@@ -41,6 +44,10 @@ public class TableHandle implements Comparable<TableHandle> {
     @JsonIgnore
     private SSTable sst;
 
+
+    public TableHandle(long id) {
+        this.id = id;
+    }
 
     public TableHandle()
     {
@@ -69,6 +76,14 @@ public class TableHandle implements Comparable<TableHandle> {
         this.sst=sst;
     }
 
+
+    public int getLevel() {
+        return level;
+    }
+
+    public void setLevel(int level) {
+        this.level = level;
+    }
 
     public synchronized void increment()
     {
@@ -232,5 +247,17 @@ public class TableHandle implements Comparable<TableHandle> {
     public int compareTo(TableHandle o) {
         //return o.fileName.compareTo(this.fileName);
         return Long.compare(o.id,(this.id));
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        TableHandle that = (TableHandle) o;
+        return id == that.id;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(id);
     }
 }
