@@ -261,11 +261,8 @@ public class SSTable {
             byte[] fullCapacity = null;
 
             if (fileChannel1 == null || !fileChannel1.isOpen()) {
-                if (fileChannel1 != null && lruValue.getLock().isHeldByCurrentThread())
-                    lruValue.getLock().unlock();
                 fileChannel1 = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
                 lruValue = new LruValue(fileChannel1);
-                lruValue.getLock().lock();
                 lru.put(x.getId(), lruValue);
             }
             lruValueList.add(lruValue);
@@ -383,15 +380,18 @@ public class SSTable {
                 if(ci.nextEntry())
                     pq.add(ci);
             }
-            indexesWrite(minKey,maxKey,minSeqNo.getVal(),maxSeqNo.getVal(),entryCount,sstTmp,block,fileChannel,bloomFilter,sparseIndex,restartPoints);
+            List<TableHandle> filtered=new ArrayList<>();
+            for(int i=start;i<=finish;i++)
+            {
+                filtered.add(list.get(i));
+            }
+            indexesWrite(minKey,maxKey,minSeqNo.getVal(),maxSeqNo.getVal(),entryCount,sstTmp,block,fileChannel,bloomFilter,sparseIndex,restartPoints,filtered);
         }
         catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
             for(LruValue lruValue:lruValueList) {
-                if (lruValue.getLock().isHeldByCurrentThread()) {
-                    lruValue.getLock().unlock();
-                }
+                lruValue.decrement();
             }
         }
     }
@@ -453,7 +453,7 @@ public class SSTable {
         count.setVal(count.getVal()+1);
         return block;
     }
-    public void indexesWrite(byte[] minKey,byte[] maxKey,long minSeqNo,long maxSeqNo,int size,Path sstTmp,ByteBuffer block,FileChannel fileChannel,byte[] bloomFilter,List<IndexEntry>sparseIndex,List<IndexEntry>restartPoints) throws IOException {
+    public void indexesWrite(byte[] minKey,byte[] maxKey,long minSeqNo,long maxSeqNo,int size,Path sstTmp,ByteBuffer block,FileChannel fileChannel,byte[] bloomFilter,List<IndexEntry>sparseIndex,List<IndexEntry>restartPoints,List<TableHandle>remove) throws IOException {
         if(block.remaining()!=0)
             blockWrite(fileChannel, block, restartPoints,sparseIndex.getLast().getIndex());
         long pos=fileChannel.position();
@@ -500,7 +500,11 @@ public class SSTable {
             Files.move(sstTmp, filePath);
         }
         TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size);
-        manifest.add(tableHandle);
+
+        Manifest manifest1=manifest.addAndRemove(tableHandle,remove);
+        Version old=version;
+        version=new Version(old.getActive(),old.getImmutables(),manifest1.getSet(),manifest1.getSetSize(),manifest1.getEpoch(),old.getImmutableSize(),old.getLastSeqNo());
+
 //            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
         byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
         try (FileChannel ch = FileChannel.open(manifestFileTemp.toPath(),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE)) {
@@ -799,15 +803,12 @@ public class SSTable {
                 fileChannel=lruValue.getFileChannel();
             }
 
+            if (fileChannel == null || !fileChannel.isOpen()) {
+                fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
+                lruValue=new LruValue(fileChannel);
+                lru.put(x.getId(), lruValue);
+            }
             try {
-                if (fileChannel == null || !fileChannel.isOpen()) {
-                    if(fileChannel!=null && lruValue.getLock().isHeldByCurrentThread())
-                        lruValue.getLock().unlock();
-                    fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
-                    lruValue=new LruValue(fileChannel);
-                    lruValue.getLock().lock();
-                    lru.put(x.getId(), lruValue);
-                }
                 Index pos = new Index(x.getSparseIndexPos());
                 List<IndexEntry> sparseIndex = getEntries(fileChannel, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
                 if (pos.getVal() != x.getBloomFilterPos())
@@ -853,9 +854,7 @@ public class SSTable {
 
             }
             finally {
-                if(lruValue!=null && lruValue.getLock().isHeldByCurrentThread()) {
-                    lruValue.getLock().unlock();
-                }
+                lruValue.decrement();
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -874,15 +873,14 @@ public class SSTable {
                     fileChannel=lruValue.getFileChannel();
                 }
                 byte[] fullCapacity=null;
+
+                //todo nikad ne bi trebalo vise da mi dodje zatvoren
+                if (fileChannel == null || !fileChannel.isOpen()) {
+                    fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
+                    lruValue=new LruValue(fileChannel);
+                    lru.put(x.getId(), lruValue);
+                }
                 try {
-                    if (fileChannel == null || !fileChannel.isOpen()) {
-                        if(fileChannel!=null && lruValue.getLock().isHeldByCurrentThread())
-                            lruValue.getLock().unlock();
-                        fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ);
-                        lruValue=new LruValue(fileChannel);
-                        lruValue.getLock().lock();
-                        lru.put(x.getId(), lruValue);
-                    }
                     Index pos = new Index(x.getSparseIndexPos());
                     //fileChannel.position(x.getSparseIndexPos());
                     List<IndexEntry> sparseIndex = getEntries(fileChannel, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
@@ -922,9 +920,7 @@ public class SSTable {
                     }
                 }
                 finally {
-                    if(lruValue!=null && lruValue.getLock().isHeldByCurrentThread()) {
-                        lruValue.getLock().unlock();
-                    }
+                    lruValue.decrement();
                 }
 
                 ByteBuffer byteBuffer=ByteBuffer.wrap(fullCapacity);

@@ -249,9 +249,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         int immutablesCount = current.getImmutables().size();
         long immutablesBytesTotal = current.getImmutableSize();
         long lastSeqNo = current.getLastSeqNo();
-        return String.format("%d %d %d %d %d",activeEntries,activeBytes,immutablesCount,immutablesBytesTotal,lastSeqNo);
-
-
+        return String.format("%d %d %d %d %d", activeEntries, activeBytes, immutablesCount, immutablesBytesTotal, lastSeqNo);
     }
 
     private void channelInit() throws IOException
@@ -606,19 +604,25 @@ public class LsmImplementation extends SSTable implements Lsm {
     //todo dodati statistike po bloku i  jos neki info iz  handle
     @Override
     public void sstInfo(String fileName) {
-        if(closed)
+        if (closed)
             throw new StoreClosed();
-        if(config==null)
+        if (config == null)
             throw new RuntimeException("Nisi uradio init");
-        if(ssException!=null)
+        if (ssException != null)
             throw new RuntimeException(ssException);
-        Version current=version;
-        TableHandle tableHandle=current.getMapTableHandles().get(fileName);
-        if(tableHandle==null) {
-            System.out.println("Ne postoji sst sa ovim fileName");
-            return;
+        Version current = version;
+        current.getRefCount().incrementAndGet();
+        try {
+            TableHandle tableHandle = current.getMapTableHandles().get(fileName);
+            if (tableHandle == null) {
+                System.out.println("Ne postoji sst sa ovim fileName");
+                return;
+            }
+            super.sstInfo(tableHandle);
         }
-        super.sstInfo(tableHandle);
+        finally {
+            current.getRefCount().decrementAndGet();
+        }
     }
 
     @Override

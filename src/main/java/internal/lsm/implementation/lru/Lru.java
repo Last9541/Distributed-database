@@ -22,33 +22,17 @@ public class Lru extends LinkedHashMap<Long, LruValue>{
     @Override
     protected synchronized boolean removeEldestEntry(Map.Entry<Long, LruValue> eldest) {
         boolean val=size()>maxSize;
-        if(val) {
-            eldest.getValue().getLock().lock();
-            try {
-                eldest.getValue().getFileChannel().close();
-            } catch (IOException ignored) {
-
-            }
-            finally {
-                eldest.getValue().getLock().unlock();
-            }
-        }
+        if(val)
+            eldest.getValue().decrement();
         return val;
     }
 
     @Override
     public synchronized LruValue put(Long key, LruValue value) {
+        value.increment();
         LruValue lruValue=super.put(key,value);
-        if(lruValue!=null && lruValue!=value) {
-            lruValue.getLock().lock();
-            try {
-                lruValue.getFileChannel().close();
-            } catch (IOException ignored) {
-            }
-            finally {
-                lruValue.getLock().unlock();
-            }
-        }
+        if(lruValue!=null)
+            lruValue.decrement();
         return lruValue;
     }
 
@@ -56,14 +40,7 @@ public class Lru extends LinkedHashMap<Long, LruValue>{
     public synchronized LruValue remove(Object key) {
         LruValue lruValue=super.remove(key);
         if(lruValue!=null) {
-            lruValue.getLock().lock();
-            try {
-                lruValue.getFileChannel().close();
-            } catch (IOException ignored) {
-            }
-            finally {
-                lruValue.getLock().unlock();
-            }
+            lruValue.decrement();
         }
         return lruValue;
     }
@@ -71,15 +48,7 @@ public class Lru extends LinkedHashMap<Long, LruValue>{
     @Override
     public synchronized void clear() {
         for(LruValue x:values()) {
-            x.getLock().lock();
-            try {
-                x.getFileChannel().close();
-            } catch (IOException ignored) {
-
-            }
-            finally {
-                x.getLock().unlock();
-            }
+            x.decrement();
         }
         super.clear();
     }
@@ -88,7 +57,7 @@ public class Lru extends LinkedHashMap<Long, LruValue>{
     public synchronized LruValue get(Object key) {
         LruValue lruValue = super.get(key);
         if(lruValue!=null)
-            lruValue.getLock().lock();
+            lruValue.increment();
         return lruValue;
     }
 }

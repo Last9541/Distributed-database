@@ -32,6 +32,21 @@ public class Manifest {
         manifest.setSize.addAll(setSize);
         return manifest;
     }
+    public synchronized Manifest addAndRemove(TableHandle tableHandle,List<TableHandle>remove)
+    {
+        set.add(tableHandle);
+        setSize.add(tableHandle);
+        for(TableHandle x:remove)
+        {
+            set.remove(x);
+            setSize.remove(x);
+        }
+        epoch++;
+        Manifest manifest=new Manifest();
+        manifest.set.addAll(set);
+        manifest.setSize.addAll(setSize);
+        return manifest;
+    }
 
     public List<TableHandle> getSetSize() {
         return new ArrayList<>(setSize);

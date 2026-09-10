@@ -1,12 +1,13 @@
 package internal.lsm.implementation.lru;
 
+import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class LruValue {
     private FileChannel fileChannel;
-    private ReentrantLock lock=new ReentrantLock();
 
+    private int refCount=1;
     public LruValue(FileChannel fileChannel) {
         this.fileChannel = fileChannel;
     }
@@ -19,11 +20,23 @@ public class LruValue {
         this.fileChannel = fileChannel;
     }
 
-    public ReentrantLock getLock() {
-        return lock;
+
+    public synchronized void increment()
+    {
+        refCount++;
+    }
+    public synchronized void decrement()
+    {
+        if (refCount <= 0)
+            throw new IllegalStateException("Invalid refCount");
+        refCount--;
+        if(refCount==0) {
+            try {
+                fileChannel.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 
-    public void setLock(ReentrantLock lock) {
-        this.lock = lock;
-    }
 }

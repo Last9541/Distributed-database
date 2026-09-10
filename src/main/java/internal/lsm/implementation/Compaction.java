@@ -60,24 +60,28 @@ public class Compaction {
         return  false;
     }
 
-    public void picker()
-    {
-        if(lsmImplementation.config.getSizeTieredFanIn()<=1)
+    public void picker() {
+        if (lsmImplementation.config.getSizeTieredFanIn() <= 1)
             throw new InvalidArgument("Ne sme da bude <=1 sizeTieredFanIn");
-        Version current=lsmImplementation.version;
-        boolean b=true;
-        for(int i=0,k=i+lsmImplementation.config.getSizeTieredFanIn()-1;k<current.getTableHandlesBySize().size();i++,k++)
-        {
-            long val=current.getTableHandlesBySize().get(k).getFileSize()/current.getTableHandlesBySize().get(i).getFileSize();
-            if(current.getTableHandlesBySize().get(k).getFileSize()%current.getTableHandlesBySize().get(i).getFileSize()!=0)
-                val++;
-            if(val>2)
-                continue;
-            b=false;
-            if(group(current,i,k))
-                return;
+        Version current = lsmImplementation.version;
+        try {
+            current.getRefCount().incrementAndGet();
+            boolean b = true;
+            for (int i = 0, k = i + lsmImplementation.config.getSizeTieredFanIn() - 1; k < current.getTableHandlesBySize().size(); i++, k++) {
+                long val = current.getTableHandlesBySize().get(k).getFileSize() / current.getTableHandlesBySize().get(i).getFileSize();
+                if (current.getTableHandlesBySize().get(k).getFileSize() % current.getTableHandlesBySize().get(i).getFileSize() != 0)
+                    val++;
+                if (val > 2)
+                    continue;
+                b = false;
+                if (group(current, i, k))
+                    return;
+            }
+            if (b && lsmImplementation.config.getSizeTieredFanIn() - 1 < current.getTableHandlesBySize().size())
+                group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1);
         }
-        if(b && lsmImplementation.config.getSizeTieredFanIn()-1 < current.getTableHandlesBySize().size())
-            group(current,0,lsmImplementation.config.getSizeTieredFanIn()-1);
+        finally {
+            current.getRefCount().decrementAndGet();
+        }
     }
 }
