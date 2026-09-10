@@ -1,7 +1,9 @@
 package internal.lsm.implementation;
 
+import internal.lsm.Global;
 import internal.lsm.TableHandle;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,7 +16,7 @@ public class Version {
     private final List<TableHandle> tableHandles;
     private final List<TableHandle> tableHandlesBySize;
     private final int epoch;
-    private final AtomicInteger refCount=new AtomicInteger();
+    private int refCount=1;
     private final long immutableSize;
     private final long lastSeqNo;
     //todo versionId
@@ -26,6 +28,7 @@ public class Version {
         this.tableHandlesBySize=tableHandlesBySize;
         for(TableHandle x:tableHandles)
         {
+            x.increment();
             mapTableHandles.put(x.getFileName(),x);
         }
         this.epoch = epoch;
@@ -72,8 +75,26 @@ public class Version {
 
 
 
-    public AtomicInteger getRefCount() {
-        return refCount;
+
+
+    public synchronized void increment()
+    {
+        if (refCount < 0)
+            throw new IllegalStateException("Invalid refCount");
+        refCount++;
+
+    }
+    public synchronized void decrement()
+    {
+        if (refCount <= 0)
+            throw new IllegalStateException("Invalid refCount");
+        refCount--;
+        if(refCount==0) {
+          for(TableHandle tableHandle:tableHandles)
+          {
+              tableHandle.decrement();
+          }
+        }
     }
 
 }

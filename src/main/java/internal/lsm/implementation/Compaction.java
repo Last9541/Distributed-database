@@ -63,9 +63,8 @@ public class Compaction {
     public void picker() {
         if (lsmImplementation.config.getSizeTieredFanIn() <= 1)
             throw new InvalidArgument("Ne sme da bude <=1 sizeTieredFanIn");
-        Version current = lsmImplementation.version;
+        Version current = lsmImplementation.acquireVersion();
         try {
-            current.getRefCount().incrementAndGet();
             boolean b = true;
             for (int i = 0, k = i + lsmImplementation.config.getSizeTieredFanIn() - 1; k < current.getTableHandlesBySize().size(); i++, k++) {
                 long val = current.getTableHandlesBySize().get(k).getFileSize() / current.getTableHandlesBySize().get(i).getFileSize();
@@ -81,7 +80,7 @@ public class Compaction {
                 group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1);
         }
         finally {
-            current.getRefCount().decrementAndGet();
+            current.decrement();
         }
     }
 }

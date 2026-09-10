@@ -28,7 +28,7 @@ import java.util.zip.CRC32C;
 
 public class SSTable {
 
-    protected Path sstPath;
+    public Path sstPath;
 
 
     Path dataPath;
@@ -73,7 +73,17 @@ public class SSTable {
 
     volatile LruWithSize lruWithSize;
 
-    private volatile Lru lru;
+    public volatile Lru lru;
+
+
+    public Version acquireVersion() {
+        synchronized (Global.versionLock) {
+            Version current = version;
+            current.increment();
+            return current;
+        }
+    }
+
 
     private long add(long a,long b,long m)
     {
@@ -137,6 +147,7 @@ public class SSTable {
                     manifest = Main.mapper.readValue(manifestFile, Manifest.class);
                     List<TableHandle> set=manifest.getSet();
                     for (TableHandle x : set) {
+                        x.setSst(this);
                         //todo sta ako se osnovna putanja promenila
                         try (FileChannel fileChannel = FileChannel.open(sstPath.resolve(Path.of(x.getFileName())), StandardOpenOption.READ)) {
                             long size = fileChannel.size();
@@ -175,7 +186,6 @@ public class SSTable {
         catch (IOException e) {
             throw new RuntimeException(e);
         }
-        version=new Version(active,new ArrayList<>(immutables.reversed()),manifest.getSet(),manifest.getSetSize(),manifest.getEpoch(),0,0);
         if(config.isCacheIndexBlocks())
             lruWithSize=new LruWithSize(config.getBlockCacheMb());
         lru=new Lru(config.getMaxOpenFiles());
@@ -499,11 +509,9 @@ public class SSTable {
         catch (AtomicMoveNotSupportedException e) {
             Files.move(sstTmp, filePath);
         }
-        TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size);
+        TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size,this);
 
         Manifest manifest1=manifest.addAndRemove(tableHandle,remove);
-        Version old=version;
-        version=new Version(old.getActive(),old.getImmutables(),manifest1.getSet(),manifest1.getSetSize(),manifest1.getEpoch(),old.getImmutableSize(),old.getLastSeqNo());
 
 //            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
         byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
@@ -520,6 +528,11 @@ public class SSTable {
         catch (AtomicMoveNotSupportedException e)
         {
             Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+        synchronized (Global.versionLock) {
+            Version old = version;
+            version = new Version(old.getActive(), old.getImmutables(), manifest1.getSet(), manifest1.getSetSize(), manifest1.getEpoch(), old.getImmutableSize(), old.getLastSeqNo());
+            old.decrement();
         }
     }
 
@@ -664,7 +677,7 @@ public class SSTable {
             catch (AtomicMoveNotSupportedException e) {
                 Files.move(sstTmp, filePath);
             }
-            TableHandle tableHandle=new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size());
+            TableHandle tableHandle=new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size(),this);
             SSWriteOutput ssWriteOutput=new SSWriteOutput(manifest.add(tableHandle),tableHandle);
 //            Main.mapper.writerWithDefaultPrettyPrinter().writeValue(manifestFileTemp,manifest);
             byte[] data = Main.mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
@@ -1091,9 +1104,11 @@ public class SSTable {
                     try {
                         immutables.remove(x);
                         immutablesSize-=x.getSize();
-                        Version old=version;
-                        version=new Version(active,new ArrayList<>(immutables.reversed()),ssWriteOutput.getManifest().getSet(),ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(),immutablesSize,old.getLastSeqNo());
-
+                        synchronized (Global.versionLock) {
+                            Version old = version;
+                            version = new Version(active, new ArrayList<>(immutables.reversed()), ssWriteOutput.getManifest().getSet(), ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(), immutablesSize, old.getLastSeqNo());
+                            old.decrement();
+                        }
                         if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
                             conditionMemtableLock.signalAll();
                         }
@@ -1123,11 +1138,13 @@ public class SSTable {
                     try {
                         immutables.remove(x);
                         immutablesSize-=x.getSize();
-                        Version old=version;
-                        //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
-                        //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
-                        version=new Version(active,new ArrayList<>(immutables.reversed()),ssWriteOutput.getManifest().getSet(),ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(),immutablesSize,old.getLastSeqNo());
-
+                        synchronized (Global.versionLock) {
+                            Version old = version;
+                            //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
+                            //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
+                            version = new Version(active, new ArrayList<>(immutables.reversed()), ssWriteOutput.getManifest().getSet(), ssWriteOutput.getManifest().getSetSize(), ssWriteOutput.getManifest().getEpoch(), immutablesSize, old.getLastSeqNo());
+                            old.decrement();
+                        }
                         if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
                             conditionMemtableLock.signalAll();
                         }

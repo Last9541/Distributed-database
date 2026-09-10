@@ -2,7 +2,11 @@ package internal.lsm;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import internal.lsm.implementation.IndexEntry;
+import internal.lsm.implementation.SSTable;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +33,13 @@ public class TableHandle implements Comparable<TableHandle> {
     @JsonIgnore
     private int bloomFilterSize;
 
+    @JsonIgnore
     private AtomicBoolean compaction=new AtomicBoolean(false);
+
+    @JsonIgnore
+    private int refCount=0;
+    @JsonIgnore
+    private SSTable sst;
 
 
     public TableHandle()
@@ -40,7 +50,7 @@ public class TableHandle implements Comparable<TableHandle> {
     public TableHandle(long id, String fileName, byte[] minKey,
                        byte[] maxKey, long minSeqNo, long maxSeqNo, Instant createdAt,
                        long fileSize, int bloomFilterSizePerKey, int bloomHashingFunctionNumber,
-                       long sparseIndexPos, int sparseIndexSize,long bloomFilterPos,int bloomFilterSize,int entryCount) {
+                       long sparseIndexPos, int sparseIndexSize,long bloomFilterPos,int bloomFilterSize,int entryCount,SSTable sst) {
         this.id = id;
         this.fileName = fileName;
         this.minKey = minKey;
@@ -56,6 +66,34 @@ public class TableHandle implements Comparable<TableHandle> {
         this.bloomFilterPos=bloomFilterPos;
         this.bloomFilterSize=bloomFilterSize;
         this.entryCount=entryCount;
+        this.sst=sst;
+    }
+
+
+    public synchronized void increment()
+    {
+        if (refCount < 0)
+            throw new IllegalStateException("Invalid refCount");
+        refCount++;
+    }
+    public synchronized void decrement()
+    {
+        if (refCount <= 0)
+            throw new IllegalStateException("Invalid refCount");
+        refCount--;
+        if(refCount==0) {
+            try {
+                sst.lru.remove(id);
+                Files.deleteIfExists(sst.sstPath.resolve(Path.of(fileName)));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    @JsonIgnore
+    public void setSst(SSTable sst) {
+        this.sst = sst;
     }
 
     public AtomicBoolean getCompaction() {

@@ -10,6 +10,8 @@ import java.nio.file.StandardOpenOption;
 
 public class Global {
 
+    public static final Object versionLock = new Object();
+
 
     public static int compareTo(byte[] arr1,byte[] arr2) {
         int len=Math.min(arr1.length,arr2.length);

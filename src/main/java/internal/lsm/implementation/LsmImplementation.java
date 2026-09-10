@@ -220,6 +220,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             {
                 x.get();
             }
+            version=new Version(active,new ArrayList<>(immutables.reversed()),manifest.getSet(),manifest.getSetSize(),manifest.getEpoch(),0,sequence);
             futures.clear();
         } catch (IOException e) {
             throw new IOFailure();
@@ -422,8 +423,11 @@ public class LsmImplementation extends SSTable implements Lsm {
                     immutables.add(active);
                     active=new Memtable();
                     new1=new ArrayList<>(immutables);
-                    Version oldVersion=version;
-                    version=new Version(active,new ArrayList<>(immutables.reversed()),new ArrayList<>(oldVersion.getTableHandles()),new ArrayList<>(oldVersion.getTableHandlesBySize()),oldVersion.getEpoch(),immutablesSize,sequence-1);
+                    synchronized (Global.versionLock) {
+                        Version oldVersion = version;
+                        version = new Version(active, new ArrayList<>(immutables.reversed()), new ArrayList<>(oldVersion.getTableHandles()), new ArrayList<>(oldVersion.getTableHandlesBySize()), oldVersion.getEpoch(), immutablesSize, sequence - 1);
+                        oldVersion.decrement();
+                    }
                 }
                 finally {
                     memtableListLock.writeLock().unlock();
@@ -485,8 +489,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException(ssException);
         //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
 
-        Version current=version;
-        current.getRefCount().incrementAndGet();
+        Version current=acquireVersion();
         try{
             MemtableEntry entry = current.getActive().getMemtable().get(new ByteArray(key));
             if (entry != null) {
@@ -507,7 +510,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             return ssTableRead(key,current);
         }
         finally {
-            current.getRefCount().decrementAndGet();
+            current.decrement();
         }
     }
 
@@ -573,17 +576,24 @@ public class LsmImplementation extends SSTable implements Lsm {
 
     @Override
     public void flushNow() {
-        if(closed)
+        if (closed)
             throw new StoreClosed();
-        if(config==null)
+        if (config == null)
             throw new RuntimeException("Nisi uradio init");
-        if(ssException!=null)
+        if (ssException != null)
             throw new RuntimeException(ssException);
-        TableHandle tableHandle=super.flushNow(new ArrayList<>(immutables));
-        if(tableHandle==null)
-            System.out.println("Nema immutable");
-        else
-            System.out.println(tableHandle.getId()+" "+tableHandle.getFileSize());
+        Version current = acquireVersion();
+        try {
+
+            TableHandle tableHandle = super.flushNow(new ArrayList<>(current.getImmutables()));
+            if (tableHandle == null)
+                System.out.println("Nema immutable");
+            else
+                System.out.println(tableHandle.getId() + " " + tableHandle.getFileSize());
+        }
+        finally {
+            current.decrement();
+        }
     }
 
     @Override
@@ -610,8 +620,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if (ssException != null)
             throw new RuntimeException(ssException);
-        Version current = version;
-        current.getRefCount().incrementAndGet();
+        Version current = acquireVersion();
         try {
             TableHandle tableHandle = current.getMapTableHandles().get(fileName);
             if (tableHandle == null) {
@@ -621,7 +630,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             super.sstInfo(tableHandle);
         }
         finally {
-            current.getRefCount().decrementAndGet();
+            current.decrement();
         }
     }
 
