@@ -31,13 +31,14 @@ public class LsmImplementation extends SSTable implements Lsm {
     private Object walLock=new Object();
 
     private FileChannel channel;
-    private Path walPath;
+
     private long size;
     private final int headerSize=8;
     private int n=1;
     private boolean closed;
     private int truncated;
 
+    private Future<?> future;
     //todo prebaci u config
     private final long keySize=64000;
     private final long valueSize=16777216;
@@ -64,19 +65,19 @@ public class LsmImplementation extends SSTable implements Lsm {
 
 
 
-    public void walDelete(long segmentId)
-    {
-        for(int i=0;i<segmentId;i++)
-        {
-            try {
-                Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i))));
-            }
-            catch (Exception e)
-            {
-                throw new IOFailure("IO Greska");
-            }
-        }
-    }
+//    public void walDelete(long segmentId)
+//    {
+//        for(int i=0;i<segmentId;i++)
+//        {
+//            try {
+//                Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i))));
+//            }
+//            catch (Exception e)
+//            {
+//                throw new IOFailure("IO Greska");
+//            }
+//        }
+//    }
 
 
     private void trunc(FileChannel fileChannel,long start,Path file) throws IOException {
@@ -224,6 +225,20 @@ public class LsmImplementation extends SSTable implements Lsm {
             }
             version=new Version(active,new ArrayList<>(immutables.reversed()),manifest.getSet(),manifest.getSetSize(),manifest.getSetLevel(),manifest.getEpoch(),0,sequence);
             futures.clear();
+            future=Main.ssTableWriter.submit(()-> {
+                try {
+                    ssTableWrite();
+                } catch (Exception e) {
+                    ssException=e;
+                    memtableListLock.writeLock().lock();
+                    try {
+                        conditionMemtableLock.signalAll();
+                    }
+                    finally {
+                        memtableListLock.writeLock().unlock();
+                    }
+                }
+            });
         } catch (IOException e) {
             throw new IOFailure();
         } catch (ExecutionException | InterruptedException e) {
@@ -327,29 +342,29 @@ public class LsmImplementation extends SSTable implements Lsm {
 
 
 
-    private void submit(List<Memtable>memtableCopy,boolean delete)
-    {
-        long copySegmentId=segmentId;
-        Main.ssTableWriter.submit(()->
-        {
-            try {
-                ssTableWrite(memtableCopy);
-                if (delete)
-                    walDelete(copySegmentId);
-            }
-            catch (Exception e)
-            {
-                ssException=e;
-                memtableListLock.writeLock().lock();
-                try {
-                    conditionMemtableLock.signalAll();
-                }
-                finally {
-                    memtableListLock.writeLock().unlock();
-                }
-            }
-        });
-    }
+//    private void submit(boolean delete)
+//    {
+//        long copySegmentId=segmentId;
+//        Main.ssTableWriter.submit(()->
+//        {
+//            try {
+//                ssTableWrite();
+//                if (delete)
+//                    walDelete(copySegmentId);
+//            }
+//            catch (Exception e)
+//            {
+//                ssException=e;
+//                memtableListLock.writeLock().lock();
+//                try {
+//                    conditionMemtableLock.signalAll();
+//                }
+//                finally {
+//                    memtableListLock.writeLock().unlock();
+//                }
+//            }
+//        });
+//    }
 
 
 
@@ -425,14 +440,14 @@ public class LsmImplementation extends SSTable implements Lsm {
             }
             else {
 
-                memtableListLock.readLock().lock();
-                List<Memtable> old=new ArrayList<>(immutables);
-                List<Memtable> new1;
-                memtableListLock.readLock().unlock();
-                if(old.size() >= config.getMaxImmutableTables())
-                {
-                    submit(old,false);
-                }
+//                memtableListLock.readLock().lock();
+//                List<Memtable> old=new ArrayList<>(immutables);
+//                List<Memtable> new1;
+//                memtableListLock.readLock().unlock();
+//                if(old.size() >= config.getMaxImmutableTables())
+//                {
+//                    submit(old,false);
+//                }
                 memtableListLock.writeLock().lock();
                 try {
                     while (immutables.size() >= config.getMaxImmutableTables() && ssException==null) {
@@ -445,8 +460,9 @@ public class LsmImplementation extends SSTable implements Lsm {
                     active.setImmutable(true);
                     immutablesSize+=active.getSize();
                     immutables.add(active);
+                    immutableQueue.put(new IQElement(active,segmentId));
                     active=new Memtable();
-                    new1=new ArrayList<>(immutables);
+//                    new1=new ArrayList<>(immutables);
                     synchronized (Global.versionLock) {
                         Version oldVersion = version;
                         version = new Version(active, new ArrayList<>(immutables.reversed()), new ArrayList<>(oldVersion.getTableHandles()), new ArrayList<>(oldVersion.getTableHandlesBySize()), new ArrayList<>(oldVersion.getTableHandlesByLevel()),oldVersion.getEpoch(), immutablesSize, sequence);
@@ -456,8 +472,6 @@ public class LsmImplementation extends SSTable implements Lsm {
                 finally {
                     memtableListLock.writeLock().unlock();
                 }
-                submit(new1,true);
-
             }
         }
         if(write)
@@ -580,8 +594,8 @@ public class LsmImplementation extends SSTable implements Lsm {
         if(config==null)
             throw new RuntimeException("Nisi uradio init");
         try {
-            Future<?> f=Main.ssTableWriter.submit(()->{});
-            f.get();
+            immutableQueue.put(new IQElement(null,-1));
+            future.get();
             channel.force(true);
             channel.close();
             closed=true;
@@ -598,6 +612,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         return immutables;
     }
 
+    //todo ova cela metoda moze na ssworker thread, ne sme na main bas, ovo vrv ne treba uopste ovo da radi
     @Override
     public void flushNow() {
         if (closed)
@@ -606,18 +621,12 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         if (ssException != null)
             throw new RuntimeException(ssException);
-        Version current = acquireVersion();
-        try {
+        TableHandle tableHandle = super.flush();
+        if (tableHandle == null)
+            System.out.println("Nema immutable");
+        else
+            System.out.println(tableHandle.getId() + " " + tableHandle.getFileSize());
 
-            TableHandle tableHandle = super.flushNow(new ArrayList<>(current.getImmutables()));
-            if (tableHandle == null)
-                System.out.println("Nema immutable");
-            else
-                System.out.println(tableHandle.getId() + " " + tableHandle.getFileSize());
-        }
-        finally {
-            current.decrement();
-        }
     }
 
     @Override

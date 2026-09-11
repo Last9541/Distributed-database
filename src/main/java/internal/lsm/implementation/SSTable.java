@@ -22,6 +22,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
@@ -52,12 +56,16 @@ public class SSTable {
 
     protected List<Memtable> immutables =new ArrayList<>();
 
+    protected BlockingDeque<IQElement> immutableQueue=new LinkedBlockingDeque<>();
+
     long immutablesSize=0;
 
 
     final ReentrantReadWriteLock memtableListLock =new ReentrantReadWriteLock();
 
     final Condition conditionMemtableLock=memtableListLock.writeLock().newCondition();
+
+    protected Path walPath;
 
     protected boolean blockWrite;
 
@@ -1103,123 +1111,109 @@ public class SSTable {
 
 
 
-    public TableHandle flushNow(List<Memtable>copy)
+
+    public void walDelete(long segmentId)
     {
-
-
-        for(Memtable x:copy){
-            //todo proveri ovo on a local variable
-            Version ver=null;
+        for(int i=0;i<segmentId;i++)
+        {
             try {
-                TableHandle ssWriteOutput=null;
-                synchronized (x) {
-                    if (!x.isRead()) {
-                        ssWriteOutput = ssTableWrite(x);
-                        memtableListLock.writeLock().lock();
-                        try {
-                            immutables.remove(x);
-                            immutablesSize -= x.getSize();
-                            synchronized (Global.manifestLock) {
-                                try {
-                                    Manifest manifest1 = manifest.add(ssWriteOutput);
-                                    manifestWrite(manifest1);
-                                    synchronized (Global.versionLock) {
-                                        Version old = version;
-                                        //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
-                                        //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
-                                        version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, old.getLastSeqNo());
-                                        old.decrement();
-                                        ver = acquireVersion();
-                                    }
-                                }
-                                catch (IOException ioException)
-                                {
-                                    throw  new RuntimeException(ioException);
-                                }
-                            }
-                            if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
-                                conditionMemtableLock.signalAll();
-                            }
-                        }
-                        finally {
-                            memtableListLock.writeLock().unlock();
-                        }
-                        x.setRead(true);
-                    }
-                }
-                if (ver != null) {
-                    //todo proveriti sta da se vrati u ovom slucaju
-                    List<TableHandle> check = ver.getTableHandlesByLevel();
-                    if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
-                        Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
-                    return ssWriteOutput;
-                }
+                Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i))));
             }
-            finally {
-                if(ver!=null)
-                    ver.decrement();
+            catch (Exception e)
+            {
+                throw new IOFailure("IO Greska");
             }
         }
-        return null;
     }
 
-    public void ssTableWrite(List<Memtable>copy)
+    public TableHandle flush()
     {
+        immutableQueue.removeIf((a)->a!=null && immutableQueue.peek()==a && a.getMemtable()!=null && a.getMemtable().isRead());
+        IQElement iqElement=immutableQueue.peek();
+        if(iqElement==null)
+            return null;
+        Memtable x=iqElement.getMemtable();
+        if(iqElement.getSegmentId()==-1) {
+            return null;
+        }
+        try {
+            return ssWork(x);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-
-        for(Memtable x:copy){
-            //todo proveri ovo on a local variable
-            //todo prebaci na atomic boolean i cas
-
-
-            Version ver = null;
-            try {
-                synchronized (x) {
-                    if (!x.isRead()) {
-                       TableHandle ssWriteOutput=ssTableWrite(x);
+    private TableHandle ssWork(Memtable x) throws IOException {
+        Version ver = null;
+        TableHandle ssWriteOutput=null;
+        try {
+            synchronized (x) {
+                if (!x.isRead()) {
+                    ssWriteOutput=ssTableWrite(x);
+                    synchronized (Global.manifestLock) {
+                        Manifest manifest1 = manifest.add(ssWriteOutput);
+                        manifestWrite(manifest1);
                         memtableListLock.writeLock().lock();
                         try {
                             immutables.remove(x);
                             immutablesSize -= x.getSize();
-                            synchronized (Global.manifestLock) {
-                                try {
-                                    Manifest manifest1 = manifest.add(ssWriteOutput);
-                                    manifestWrite(manifest1);
-                                    synchronized (Global.versionLock) {
-                                        Version old = version;
-                                        //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
-                                        //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
-                                        version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, old.getLastSeqNo());
-                                        old.decrement();
-                                        ver = acquireVersion();
-                                    }
-                                }
-                                catch (IOException ioException)
-                                {
-                                    throw new RuntimeException(ioException);
-                                }
+                            synchronized (Global.versionLock) {
+                                Version old = version;
+                                //todo ovaj version radi kako treba zato sto je u pitanju single writer, inace bi morali da napravimo sinhronu metodu u manifestu koja generise version, a prosledimo parametre koji se tu ne nalaze
+                                //todo sada radi i za single writer, ali se prave bespotrebne nove instance prilikom get-a, napraviti novu metodu koja ce vracati samo pokazivac, al je bitno da je da se ne koristi van ovog (i mozda jos kojeg) case-a
+                                version = new Version(active, new ArrayList<>(immutables.reversed()), manifest1.getSet(), manifest1.getSetSize(), manifest1.getSetLevel(), manifest1.getEpoch(), immutablesSize, old.getLastSeqNo());
+                                old.decrement();
+                                ver = acquireVersion();
                             }
+
                             if (blockWrite && immutables.size() < config.getMaxImmutableTables()) {
                                 conditionMemtableLock.signalAll();
                             }
-                        }
-
-                        finally {
+                        } finally {
                             memtableListLock.writeLock().unlock();
                         }
-                        x.setRead(true);
                     }
-                }
-                if (ver != null) {
-                    List<TableHandle> check = ver.getTableHandlesByLevel();
-                    if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
-                        Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
+                    x.setRead(true);
                 }
             }
-            finally {
-                if(ver!=null)
-                    ver.decrement();
+            if (ver != null) {
+                List<TableHandle> check = ver.getTableHandlesByLevel();
+                if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
+                    Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
             }
+        }  finally {
+            if(ver!=null)
+                ver.decrement();
+        }
+        return ssWriteOutput;
+    }
+
+
+    public void ssTableWrite() throws InterruptedException {
+
+
+        while (true){
+            //todo proveri ovo on a local variable
+            //todo prebaci na atomic boolean i cas
+            IQElement iqElement=immutableQueue.take();
+            Memtable x=iqElement.getMemtable();
+            if(iqElement.getSegmentId()==-1)
+                break;
+            try {
+                ssWork(x);
+            } catch (IOException e) {
+                while (true) {
+                    try {
+                        immutableQueue.putFirst(iqElement);
+                    } catch (InterruptedException ex) {
+                        System.out.println(ex.getMessage());
+                        continue;
+                    }
+                    break;
+                }
+                continue;
+            }
+            walDelete(iqElement.getSegmentId());
         }
     }
 
