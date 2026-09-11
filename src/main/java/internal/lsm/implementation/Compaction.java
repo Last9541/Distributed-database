@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.*;
 
 public class Compaction {
 
@@ -27,7 +28,7 @@ public class Compaction {
         this.lsmImplementation = lsmImplementation;
     }
 
-
+    protected BlockingDeque<CWElement> compactionQueue=new LinkedBlockingDeque<>();
 
 
     public boolean group(Version current,int start,int end,List<TableHandle> tableHandles)
@@ -37,7 +38,7 @@ public class Compaction {
         try {
             for (; i <= end; i++) {
                 TableHandle tableHandle = tableHandles.get(i);
-                if (!tableHandle.getCompaction().compareAndSet(false, true)) {
+                if (tableHandle.isCompacted() || !tableHandle.getCompaction().compareAndSet(false, true)) {
                     proceed = false;
                     break;
                 }
@@ -60,7 +61,27 @@ public class Compaction {
         return  false;
     }
 
-    public void picker() {
+
+   public void loop() throws InterruptedException {
+       while (true)
+       {
+
+           CWElement cwElement=compactionQueue.take();
+           if(cwElement.getStart()==-1)
+               break;
+           try
+           {
+               group(cwElement.getVersion(),cwElement.getStart(),cwElement.getEnd(),cwElement.getList());
+           }
+           finally {
+               cwElement.getVersion().decrement();
+           }
+       }
+   }
+
+
+
+    public void picker() throws InterruptedException {
         if (lsmImplementation.config.getSizeTieredFanIn() <= 1)
             throw new InvalidArgument("Ne sme da bude <=1 sizeTieredFanIn");
         Version current = lsmImplementation.acquireVersion();
@@ -73,14 +94,24 @@ public class Compaction {
                 if (val > 2)
                     continue;
                 b = false;
-                if (group(current, i, k,current.getTableHandlesBySize()))
-                    return;
+                compactionQueue.put(new CWElement(current, i, k, current.getTableHandlesBySize()));
+                break;
+//            if (group(current, i, k, current.getTableHandlesBySize()))
+//                return;
             }
-            if (b && lsmImplementation.config.getSizeTieredFanIn() - 1 < current.getTableHandlesByLevel().size())
-                group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1,current.getTableHandlesByLevel());
+            if (b && lsmImplementation.config.getSizeTieredFanIn() - 1 < current.getTableHandlesByLevel().size()) {
+                compactionQueue.put(new CWElement(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1, current.getTableHandlesByLevel()));
+                //group(current, 0, lsmImplementation.config.getSizeTieredFanIn() - 1, current.getTableHandlesByLevel());;
+                b=false;
+            }
+            if(b)
+                current.decrement();
         }
-        finally {
+        catch (Exception e)
+        {
             current.decrement();
+            throw e;
         }
+
     }
 }

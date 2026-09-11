@@ -54,6 +54,7 @@ public class Manifest {
         {
             if(x.getLevel()>max)
                     max=x.getLevel();
+            x.setCompacted(true);
             set.remove(x);
             setSize.remove(x);
             setLevel.remove(x);

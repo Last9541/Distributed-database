@@ -22,10 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
-import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32C;
@@ -1138,7 +1135,7 @@ public class SSTable {
         }
         try {
             return ssWork(x);
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
@@ -1178,12 +1175,26 @@ public class SSTable {
             }
             if (ver != null) {
                 List<TableHandle> check = ver.getTableHandlesByLevel();
-                if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0)
-                    Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
+                if (check.size() >= config.getL0CompactionTrigger() && check.get(config.getL0CompactionTrigger() - 1).getLevel() == 0) {
+                    //Main.compaction.group(ver, 0, config.getL0CompactionTrigger() - 1, check);
+                    try {
+
+                        Main.compaction.compactionQueue.put(new CWElement(ver, 0, config.getL0CompactionTrigger() - 1, check));
+                    }
+                    catch (Exception e)
+                    {
+                       ver.decrement();
+                    }
+                }
+                else
+                {
+                    ver.decrement();
+                }
             }
-        }  finally {
-            if(ver!=null)
-                ver.decrement();
+        }
+        finally {
+//            if(ver!=null)
+//                ver.decrement();
         }
         return ssWriteOutput;
     }
@@ -1201,7 +1212,7 @@ public class SSTable {
                 break;
             try {
                 ssWork(x);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 while (true) {
                     try {
                         immutableQueue.putFirst(iqElement);

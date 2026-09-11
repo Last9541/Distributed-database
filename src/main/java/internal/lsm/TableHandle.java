@@ -43,6 +43,8 @@ public class TableHandle implements Comparable<TableHandle> {
     private int refCount=0;
     @JsonIgnore
     private SSTable sst;
+    @JsonIgnore
+    private boolean compacted;
 
 
     public TableHandle(long id) {
@@ -76,6 +78,14 @@ public class TableHandle implements Comparable<TableHandle> {
         this.sst=sst;
     }
 
+
+    public synchronized boolean isCompacted() {
+        return compacted;
+    }
+
+    public synchronized void setCompacted(boolean compacted) {
+        this.compacted = compacted;
+    }
 
     public int getLevel() {
         return level;

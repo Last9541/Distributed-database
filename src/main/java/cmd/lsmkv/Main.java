@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 public class Main {
 
@@ -36,6 +37,10 @@ public class Main {
     private static ExecutorService write= Executors.newSingleThreadExecutor();
 
     private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    public static ScheduledExecutorService compactionWorker=Executors.newSingleThreadScheduledExecutor();
+
+    public static ExecutorService compactionLoop=Executors.newSingleThreadExecutor();
 
 
     public static Compaction compaction=new Compaction((SSTable) lsm);

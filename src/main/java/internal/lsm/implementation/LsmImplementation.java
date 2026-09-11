@@ -15,6 +15,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32C;
 
 //todo zameniti exceptione svuda za errors exceptione
@@ -239,6 +240,20 @@ public class LsmImplementation extends SSTable implements Lsm {
                     }
                 }
             });
+            Main.compactionLoop.submit(()-> {
+                try {
+                    Main.compaction.loop();
+                } catch (Exception e) {
+                    ssException=e;
+                }
+            });
+            Main.compactionWorker.scheduleAtFixedRate(()->{
+                try {
+                    Main.compaction.picker();
+                } catch (InterruptedException e) {
+                    ssException=e;
+                }
+            },0,5, TimeUnit.SECONDS);
         } catch (IOException e) {
             throw new IOFailure();
         } catch (ExecutionException | InterruptedException e) {
@@ -406,8 +421,9 @@ public class LsmImplementation extends SSTable implements Lsm {
                     futures.add(Main.ssTableWriter.submit(() -> {
                         try {
                             manifestWrite(manifest.add(ssTableWrite(copy)));
-                        } catch (IOException e) {
-                            throw new RuntimeException(e);
+                        } catch (Exception e) {
+                            ssException=e;
+                            return;
                         }
                         walDelete(copySegmentId);
                     }));
@@ -595,7 +611,14 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException("Nisi uradio init");
         try {
             immutableQueue.put(new IQElement(null,-1));
+            Main.compaction.compactionQueue.put(new CWElement(null,-1,-1,null));
             future.get();
+            Main.ssTableWriter.close();
+            Main.compactionWorker.close();
+            Main.compactionLoop.close();
+            lru.clear();
+            if(lruWithSize!=null)
+                lruWithSize.clear();
             channel.force(true);
             channel.close();
             closed=true;
