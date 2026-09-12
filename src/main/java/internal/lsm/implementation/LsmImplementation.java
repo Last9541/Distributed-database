@@ -224,6 +224,8 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new InvalidArgument("l0compactiontrigger mora biti veci od 0");
         closed=false;
         this.config=config;
+        if(headerSize<=magic.length()+1)
+            throw new InvalidArgument();
         //memtables.add(new Memtable());
         active=new Memtable();
         dataPath=Path.of(config.getDataDir());
@@ -452,7 +454,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             ByteBuffer record = ByteBuffer.allocate(headerSize);
             record.put(magic.getBytes(StandardCharsets.US_ASCII));
             record.put((byte)1);
-            record.put(new byte[3]);
+            record.put(new byte[headerSize-1-magic.length()]);
             record.flip();
             while (record.hasRemaining())
             {

@@ -142,6 +142,8 @@ public class SSTable {
 
     public void init()
     {
+        if(headerSize<=magic.length()+1)
+            throw new InvalidArgument();
         manifestFile=dataPath.resolve(Path.of("manifest.json")).toFile();
         manifestFileTemp=dataPath.resolve(Path.of("manifest.json.tmp")).toFile();
         try {
@@ -345,7 +347,8 @@ public class SSTable {
             ByteBuffer record = ByteBuffer.allocate(headerSize);
             record.put(magic.getBytes(StandardCharsets.US_ASCII));
             record.put((byte)1);
-            record.put(new byte[3]);
+            //todo header-1-magic.length
+            record.put(new byte[headerSize-1-magic.length()]);
             record.flip();
             while (record.hasRemaining())
             {
@@ -581,7 +584,7 @@ public class SSTable {
             ByteBuffer record = ByteBuffer.allocate(headerSize);
             record.put(magic.getBytes(StandardCharsets.US_ASCII));
             record.put((byte)1);
-            record.put(new byte[3]);
+            record.put(new byte[headerSize-1-magic.length()]);
             record.flip();
             while (record.hasRemaining())
             {
@@ -1079,6 +1082,7 @@ public class SSTable {
                     if (Files.isRegularFile(file) && name.contains(".")) {
                         if (name.substring(name.indexOf('.')).equals(".sst")) {
                             long num=Long.parseLong(name.substring(0, name.indexOf('.')));
+                            //todo check
                             if(!hashSet.contains(new TableHandle(num)))
                             {
                                 Files.deleteIfExists(file);
