@@ -89,6 +89,132 @@ public class LsmImplementation extends SSTable implements Lsm {
 
 
 
+    public void walVerify()
+    {
+        long sequence=0;
+        long segment=0;
+        long truncated=0;
+        long records=0;
+        try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(walPath)) {
+            List<Path> files=new ArrayList<>();
+            for(Path file:filesStream)
+            {
+                files.add(file);
+            }
+            files.sort(Comparator.naturalOrder());
+
+            for(Path file:files) {
+                String name = file.getFileName().toString();
+                if (Files.isRegularFile(file) && name.contains(".") && name.substring(name.indexOf('.')).equals(".wal")) {
+
+                        try (FileChannel fileChannel = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+                            headerCheck(fileChannel,headerSize,magic);
+                            long size = fileChannel.size();
+                            while (fileChannel.position() < size) {
+                                long start = fileChannel.position();
+                                ByteBuffer byteBuffer = ByteBuffer.allocate(Integer.BYTES);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+                                int len = byteBuffer.getInt();
+                                //mora biti >= konstantama + 1 zato sto kljuc ne sme biti prazan, a ne sme biti veci od size - velicina checksuma(4B TJ integer size)
+                                if (len < Byte.BYTES + Long.BYTES + Integer.BYTES + Integer.BYTES + Byte.BYTES || fileChannel.position() + len + Integer.BYTES > size) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+                                if (len > lenSize) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+                                byteBuffer = ByteBuffer.allocate(len);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+                                byte[] content = new byte[len];
+                                byteBuffer.get(content);
+                                crc32C.update(content, 0, len);
+                                int newCheckSum = (int) crc32C.getValue();
+                                crc32C.reset();
+                                byteBuffer = ByteBuffer.allocate(Integer.BYTES);
+                                if (!bufferRead(byteBuffer, fileChannel)) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+
+                                int checksum = byteBuffer.getInt();
+                                if (newCheckSum != checksum) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+                                try {
+                                    ByteBuffer later = ByteBuffer.wrap(content);
+                                    RecordType recordType = RecordType.getByValue(later.get());
+                                    long newSequence = later.getLong();
+                                    int keyBytesLength = later.getInt();
+                                    int valueBytesLength = later.getInt();
+                                    //todo proveriti da li ovako da castujem long ili samo jedan, proveri takodje ovo za DELETE
+                                    if (keyBytesLength <= 0 || valueBytesLength < 0 || (long) keyBytesLength + (long) valueBytesLength != later.remaining() || recordType == RecordType.DELETE && valueBytesLength > 0) {
+                                        throw new Exception();
+                                    }
+                                    //TODO napraviti novi exception za ovo
+                                    if (keyBytesLength > keySize)
+                                        throw new Exception();
+                                    byte[] keyArray = new byte[keyBytesLength];
+                                    byte[] valueArray = null;
+                                    later.get(keyArray);
+//                                    String key = new String(keyArray, StandardCharsets.UTF_8);
+//                                    String value = null;
+                                    if (valueBytesLength > later.remaining())
+                                        throw new Exception();
+                                    if (valueBytesLength > valueSize)
+                                        throw new Exception();
+                                    if (valueBytesLength > 0) {
+                                        valueArray = new byte[valueBytesLength];
+                                        later.get(valueArray);
+//                                        value = new String(valueArray, StandardCharsets.UTF_8);
+                                    }
+                                    records++;
+                                    sequence = Math.max(sequence, newSequence);
+                                }
+//                                catch (IOFailure ioFailure) {
+//                                    throw ioFailure;
+//                                }
+                                catch (Exception e) {
+                                    trunc(fileChannel, start, file);
+                                    truncated++;
+                                    break;
+                                }
+
+                            }
+
+                        }
+                        segment++;
+//                        catch (IOFailure e) {
+//                            throw new RuntimeException(e);
+//                        }
+
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        System.out.printf(
+                "recovery: segments=%d records=%d truncated=%d last_seqno=%d%n",
+                segment, records, truncated, sequence
+        );
+    }
+
+
+
+
     public void init(Config config) throws IOException {
         if(this.config!=null)
             throw new InvalidArgument("Vec je uradjen init, moras ponovo");
@@ -280,10 +406,38 @@ public class LsmImplementation extends SSTable implements Lsm {
             activeBytes = memtable.getSize();
         }
         int immutablesCount = current.getImmutables().size();
+        long sstTotalBytes=0;
+        for(TableHandle x:current.getTableHandles())
+        {
+            sstTotalBytes+=x.getFileSize();
+        }
         long immutablesBytesTotal = current.getImmutableSize();
         long lastSeqNo = sequence-1;
-        return String.format("%d %d %d %d %d", activeEntries, activeBytes, immutablesCount, immutablesBytesTotal, lastSeqNo);
-    }
+        return String.format(
+                "epoch=%d last_seqno=%d%n" +
+                        "active_entries=%d active_bytes=%d%n" +
+                        "immutables=%d immutables_bytes=%d%n" +
+                        "sst_live=%d sst_total_bytes=%d%n" +
+                        "block_cache_hits=%d block_cache_misses=%d%n" +
+                        "blooms_checked=%d blooms_negative=%d%n" +
+                        "disk_block_reads=%d%n" +
+                        "compaction_backlog_bytes=%d jobs_running=%d",
+                current.getEpoch(),
+                lastSeqNo,
+                activeEntries,
+                activeBytes,
+                immutablesCount,
+                immutablesBytesTotal,
+                current.getImmutables().size(),
+                sstTotalBytes
+//                blockCacheHits,
+//                blockCacheMisses,
+//                bloomsChecked,
+//                bloomsNegative,
+//                diskBlockReads,
+//                compactionBacklogBytes,
+//                jobsRunning
+        );    }
 
     private void channelInit() throws IOException
     {
