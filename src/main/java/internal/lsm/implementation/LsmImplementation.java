@@ -237,11 +237,23 @@ public class LsmImplementation extends SSTable implements Lsm {
         //memtables.add(new Memtable());
         active=new Memtable();
         dataPath=Path.of(config.getDataDir());
-        Files.createDirectories(dataPath);
+        boolean sync=false;
+        if(Files.notExists(dataPath)) {
+            Files.createDirectories(dataPath);
+            fsyncDirectory(dataPath.getParent());
+        }
         walPath = dataPath.resolve(Path.of("wal"));
-        Files.createDirectories(walPath);
+        if(Files.notExists(walPath)) {
+            Files.createDirectories(walPath);
+            sync=true;
+        }
         sstPath=dataPath.resolve(Path.of("sst"));
-        Files.createDirectories(sstPath);
+        if(Files.notExists(sstPath)) {
+            Files.createDirectories(sstPath);
+            sync=true;
+        }
+        if(sync)
+            fsyncDirectory(dataPath);
         super.init();
 
         long sequence=0;
@@ -469,6 +481,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             }
             size=headerSize;
             channel.force(true);
+            fsyncDirectory(walPath);
         }
         else
         {

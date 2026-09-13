@@ -126,7 +126,17 @@ public class SSTable {
         return true;
     }
 
-
+    public void fsyncDirectory(Path dir) throws IOException {
+        if(dir==null)
+            return;
+        try (FileChannel ch = FileChannel.open(dir, StandardOpenOption.READ)) {
+            ch.force(true);
+        }
+        catch (FileSystemException e){
+            System.out.println("Sync failed:"+ e.getMessage());
+            throw e;
+        }
+    }
 
     public void headerCheck(FileChannel fileChannel, int headerSize, String magic) throws IOException {
         ByteBuffer byteBuffer=ByteBuffer.allocate(headerSize);
@@ -165,6 +175,7 @@ public class SSTable {
         try {
             if (Files.notExists(manifestFile.toPath())) {
                 Files.createFile(manifestFile.toPath());
+                fsyncDirectory(manifestFile.toPath().getParent());
             } else {
                 if(Files.size(manifestFile.toPath())!=0) {
                     manifest = Main.mapper.readValue(manifestFile, Manifest.class);
@@ -556,6 +567,7 @@ public class SSTable {
         catch (AtomicMoveNotSupportedException e) {
             Files.move(sstTmp, filePath);
         }
+        fsyncDirectory(filePath.getParent());
         TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size,this);
 
         synchronized (Global.manifestLock) {
@@ -585,6 +597,7 @@ public class SSTable {
         } catch (AtomicMoveNotSupportedException e) {
             Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
         }
+        fsyncDirectory(manifestFile.toPath().getParent());
     }
 
 
@@ -728,6 +741,7 @@ public class SSTable {
             catch (AtomicMoveNotSupportedException e) {
                 Files.move(sstTmp, filePath);
             }
+            fsyncDirectory(filePath.getParent());
             return new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size(), this);
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -1095,6 +1109,7 @@ public class SSTable {
 
     public void loadSegmentsId()
     {
+        boolean sync=false;
         try(DirectoryStream<Path> filesStream = Files.newDirectoryStream(sstPath)) {
             Set<TableHandle> hashSet=new HashSet<>(manifest.getSet());
             for(Path file:filesStream)
@@ -1107,14 +1122,16 @@ public class SSTable {
                             //todo check
                             if(!hashSet.contains(new TableHandle(num)))
                             {
-                                Files.deleteIfExists(file);
+                                if(Files.deleteIfExists(file))
+                                    sync=true;
                             }
                             else
                                 segmentId = Math.max(segmentId,num);
 
                         } else {
                             if (name.substring(name.indexOf('.')).equals(".sst.tmp")) {
-                                Files.deleteIfExists(file);
+                                if(Files.deleteIfExists(file))
+                                    fsyncDirectory(file.getParent());
                             }
                         }
                     }
@@ -1125,6 +1142,8 @@ public class SSTable {
                 }
 
             }
+            if(sync)
+                fsyncDirectory(sstPath);
             segmentId++;
             tempSegmentId++;
         } catch (IOException e) {
@@ -1137,14 +1156,23 @@ public class SSTable {
 
     public void walDelete(long segmentId)
     {
+        boolean sync=false;
         for(int i=0;i<segmentId;i++)
         {
             try {
-                Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i))));
+                if(Files.deleteIfExists(walPath.resolve(Path.of(String.format("%06d.wal", i)))))
+                    sync=true;
             }
             catch (Exception e)
             {
                 throw new IOFailure("IO Greska");
+            }
+        }
+        if(sync) {
+            try {
+                fsyncDirectory(walPath);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
         }
     }

@@ -109,7 +109,9 @@ public class TableHandle implements Comparable<TableHandle> {
         if(refCount==0) {
             try {
                 sst.lru.remove(id);
-                Files.deleteIfExists(sst.sstPath.resolve(Path.of(fileName)));
+                if(Files.deleteIfExists(sst.sstPath.resolve(Path.of(fileName))))
+                    sst.fsyncDirectory(sst.sstPath);
+
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
