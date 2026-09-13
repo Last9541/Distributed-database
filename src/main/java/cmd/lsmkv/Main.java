@@ -55,11 +55,13 @@ public class Main {
             args=scanner.next().split(" +");
             if (args.length == 0)
                 throw new RuntimeException("ERROR");
-            for (int i = 1; i < args.length - 1; i++) {
+            for (int i = 2; i < args.length - 1; i++) {
                 if (args[i].startsWith("--") && !args[i + 1].startsWith("--"))
                     arguments.put(args[i].replace("-", ""), args[i + 1]);
             }
-            switch (args[0].toLowerCase()) {
+            if(args.length<2 && !args[0].equals("lsmvk"))
+                continue;
+            switch (args[1].toLowerCase()) {
                 case "init": {
                     //todo videti da li raditi ovo ili dodati throws za metodu
                     try {
@@ -133,6 +135,37 @@ public class Main {
                     if (lsm == null)
                         throw new RuntimeException("Moras da pozoves init");
                     lsm.flushNow();
+                    break;
+                }
+                case "list-set":
+                {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    lsm.listSst();
+                    break;
+                }
+                case "sst-info":
+                {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    String filename=arguments.get("filename");
+                    if(filename==null)
+                        throw new InvalidArgument("Unesi filename");
+                    lsm.sstInfo(arguments.get("filename"));
+                    break;
+                }
+                case "manifest-info":
+                {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    lsm.manifestInfo();
+                    break;
+                }
+                case "version-info":
+                {
+                    if (lsm == null)
+                        throw new RuntimeException("Moras da pozoves init");
+                    lsm.versionInfo();
                     break;
                 }
             }
