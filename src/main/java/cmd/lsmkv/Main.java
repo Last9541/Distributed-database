@@ -73,7 +73,11 @@ public class Main {
                         }
                         else {
                             System.out.println("Default init");
-                            config=instance;
+                            Path path = Path.of("config/default.json");
+                            if(Files.notExists(path))
+                                config=instance;
+                            else
+                                config=mapper.readValue(path.toFile(), Config.class);
                         }
                         lsm.init(config);
                     } catch (Exception e) {
