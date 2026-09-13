@@ -133,8 +133,10 @@ public class SSTable {
             ch.force(true);
         }
         catch (FileSystemException e){
-            System.out.println("Sync failed:"+ e.getMessage());
-            throw e;
+            if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
+                System.out.println("Sync failed:"+ e.getMessage());
+                throw e;
+            }
         }
     }
 
