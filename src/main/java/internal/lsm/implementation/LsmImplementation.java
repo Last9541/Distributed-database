@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32C;
@@ -41,10 +42,11 @@ public class LsmImplementation extends SSTable implements Lsm {
     private int truncated;
 
     private Future<?> future;
+    private Future<?> compactFuture;
     //todo prebaci u config
-    private final long keySize=64000;
-    private final long valueSize=16777216;
-    private final long lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
+    private long keySize;
+    private long valueSize;
+    private long lenSize;
     private String magic="WAL1";
     private List<Future<?>> futures=new ArrayList<>();
     private volatile Exception ssException;
@@ -219,8 +221,13 @@ public class LsmImplementation extends SSTable implements Lsm {
     public void init(Config config) throws IOException {
         if(this.config!=null)
             throw new InvalidArgument("Vec je uradjen init, moras ponovo");
-        if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize || config.getBlockSize()<config.getMemtableMaxBytes())
+        keySize=config.getBlockSize()/8;
+        valueSize=keySize*2;
+        if(keySize==0)
             throw new InvalidArgument("Premali blockSize u config");
+        lenSize=keySize+valueSize+Byte.BYTES+Long.BYTES+Integer.BYTES*2;
+//        if(config.getBlockSize()<MemtableEntry.documentedSize+keySize+valueSize)
+//            throw new InvalidArgument("Premali blockSize u config");
         if(config.getL0CompactionTrigger()<=0)
             throw new InvalidArgument("l0compactiontrigger mora biti veci od 0");
         closed=false;
@@ -369,7 +376,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                     }
                 }
             });
-            Main.compactionLoop.submit(()-> {
+            compactFuture=Main.compactionLoop.submit(()-> {
                 try {
                     Main.compaction.loop();
                 } catch (Exception e) {
@@ -766,12 +773,16 @@ public class LsmImplementation extends SSTable implements Lsm {
         if(config==null)
             throw new RuntimeException("Nisi uradio init");
         try {
+            Future<?> f=Main.write.submit(()->{});
+            f.get();
             immutableQueue.put(new IQElement(null,-1));
             Main.compaction.compactionQueue.put(new CWElement(null,-1,-1,null));
             future.get();
+            compactFuture.get();
             Main.ssTableWriter.close();
             Main.compactionWorker.close();
             Main.compactionLoop.close();
+            Main.write.close();
             lru.clear();
             if(lruWithSize!=null)
                 lruWithSize.clear();

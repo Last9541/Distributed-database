@@ -130,8 +130,19 @@ public class SSTable {
 
     public void headerCheck(FileChannel fileChannel, int headerSize, String magic) throws IOException {
         ByteBuffer byteBuffer=ByteBuffer.allocate(headerSize);
+        if (!bufferRead(byteBuffer, fileChannel))
+            throw new CorruptionDetected("Nevalidan header");
+        headerValidate(headerSize, magic, byteBuffer);
+    }
+
+    public void headerCheck1(FileChannel fileChannel, int headerSize, String magic) throws IOException {
+        ByteBuffer byteBuffer=ByteBuffer.allocate(headerSize);
         if (!bufferRead(byteBuffer, fileChannel,new Index(0)))
             throw new CorruptionDetected("Nevalidan header");
+        headerValidate(headerSize, magic, byteBuffer);
+    }
+
+    private void headerValidate(int headerSize, String magic, ByteBuffer byteBuffer) {
         byte[] header = new byte[headerSize];
         byteBuffer.get(header);
         String mag = new String(header, 0, magic.length(), StandardCharsets.US_ASCII);
@@ -291,7 +302,7 @@ public class SSTable {
                 lru.put(x.getId(), lruValue);
             }
             lruValueList.add(lruValue);
-            headerCheck(fileChannel1, headerSize, magic);
+            headerCheck1(fileChannel1, headerSize, magic);
             Index pos = new Index(x.getSparseIndexPos());
             List<IndexEntry> sparseIndex = getEntries(fileChannel1, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
             if (pos.getVal() != x.getBloomFilterPos())
@@ -1227,7 +1238,8 @@ public class SSTable {
                 break;
             try {
                 ssWork(x);
-            } catch (Exception e) {
+            } catch (IOException e) {
+                System.out.println(e.getMessage());
                 while (true) {
                     try {
                         immutableQueue.putFirst(iqElement);

@@ -2,6 +2,7 @@ package cmd.lsmkv;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import internal.lsm.Config;
 import internal.lsm.Global;
 import internal.lsm.Lsm;
@@ -34,9 +35,9 @@ public class Main {
     private static Config instance=new Config();
 
     //todo zbog ovoga nema locka za write, ali mozda ce trebati, ne zaboravi
-    private static ExecutorService write= Executors.newSingleThreadExecutor();
+    public static ExecutorService write= Executors.newSingleThreadExecutor();
 
-    private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    //private static ExecutorService reader=Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     public static ScheduledExecutorService compactionWorker=Executors.newSingleThreadScheduledExecutor();
 
@@ -45,14 +46,26 @@ public class Main {
 
     public static Compaction compaction=new Compaction((SSTable) lsm);
 
+    public static RuntimeException exception;
+
+
+    static {
+        mapper.registerModule(new JavaTimeModule());
+        mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+    }
+
     public static void main(String[] args) {
         Scanner scanner=new Scanner(System.in);
-        mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+
         System.out.println(System.getProperty("user.dir"));
         Map<String,String> arguments=new HashMap<>();
         boolean flag=true;
         while(flag) {
-            args=scanner.next().split(" +");
+            arguments.clear();
+            if(exception!=null) {
+                System.out.println(exception.getMessage());
+            }
+            args=Parser.parse(scanner.nextLine().toCharArray());
             if (args.length == 0)
                 throw new RuntimeException("ERROR");
             for (int i = 2; i < args.length - 1; i++) {
@@ -79,101 +92,159 @@ public class Main {
                             else
                                 config=mapper.readValue(path.toFile(), Config.class);
                         }
-                        lsm.init(config);
+                        try {
+                            lsm.init(config);
+                        }
+                        catch (RuntimeException e)
+                        {
+                            exception=e;
+                        }
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
                     break;
                 }
                 case "put": {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     if (arguments.containsKey("key") && arguments.containsKey("value")) {
-                        write.submit(() -> lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8)));
+                        byte[] key=arguments.get("key").getBytes(StandardCharsets.UTF_8);
+                        byte[] value=arguments.get("value").getBytes(StandardCharsets.UTF_8);
+                        write.submit(() ->
+                        {
+                            try {
+                                lsm.put(key,value);
+                            }
+                            catch (RuntimeException e)
+                            {
+                                exception=e;
+                            }
+                        });
                         //lsm.put(arguments.get("key").getBytes(StandardCharsets.UTF_8), arguments.get("value").getBytes(StandardCharsets.UTF_8));
                     } else {
-                        throw new InvalidArgument();
+                        exception=new InvalidArgument();
                     }
                     break;
                 }
                 case "get": {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     if (arguments.containsKey("key")) {
 //                        reader.submit(() -> System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)))));
                         //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
-                        System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8))));
+                        try
+                        {
+                            System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8))));
+                        }
+                        catch (RuntimeException e)
+                        {
+                            exception=e;
+                        }
                     } else {
-                        throw new InvalidArgument();
+                        exception=new InvalidArgument();
                     }
                     break;
                 }
                 case "del": {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     if (arguments.containsKey("key")) {
-                        write.submit(() -> lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8)));
+                        byte[] key=arguments.get("key").getBytes(StandardCharsets.UTF_8);
+                        write.submit(() ->
+                        {
+                            try {
+                                lsm.delete(key);
+                            }
+                            catch (RuntimeException e)
+                            {
+                                exception=e;
+                            }
+                        });
                         //lsm.delete(arguments.get("key").getBytes(StandardCharsets.UTF_8));
                     } else {
-                        throw new InvalidArgument();
+                        exception=new InvalidArgument();
                     }
                     break;
                 }
                 //TODO uradi ovo
                 case "stats": {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     System.out.println(lsm.stats());
                     break;
                 }
                 //todo proveri da li close radi lepo
                 case "close": {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     lsm.close();
+//                    ssTableWriter= Executors.newSingleThreadExecutor();
+//                    compactionWorker=Executors.newSingleThreadScheduledExecutor();
+//                    compactionLoop=Executors.newSingleThreadScheduledExecutor();
+//                    write=Executors.newSingleThreadExecutor();
                     //todo videti da li ostati u beskonacnoj petlji
                     flag=false;
                     break;
                 }
                 case "flush-now":{
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     lsm.flushNow();
                     break;
                 }
-                case "list-set":
+                case "list-sst":
                 {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     lsm.listSst();
                     break;
                 }
                 case "sst-info":
                 {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     String filename=arguments.get("filename");
                     if(filename==null)
-                        throw new InvalidArgument("Unesi filename");
+                        exception= new InvalidArgument("Unesi filename");
                     lsm.sstInfo(arguments.get("filename"));
                     break;
                 }
                 case "manifest-info":
                 {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     lsm.manifestInfo();
                     break;
                 }
                 case "version-info":
                 {
-                    if (lsm == null)
-                        throw new RuntimeException("Moras da pozoves init");
+                    if (lsm == null) {
+                        exception = new RuntimeException("Moras da pozoves init");
+                        continue;
+                    }
                     lsm.versionInfo();
                     break;
                 }
             }
-            arguments.clear();
+            //arguments.clear();
         }
     }
 }
