@@ -80,6 +80,11 @@ public class SSTable {
 
     public volatile Lru lru;
 
+    protected int bloomsCheck;
+
+    protected int bloomsNegative;
+
+    protected int diskBlockReads;
 
     public Version acquireVersion() {
         synchronized (Global.versionLock) {
@@ -245,13 +250,16 @@ public class SSTable {
 
     private boolean readBloom(byte[] bloom,byte[] key,long m,int hashingFunctionNumber)
     {
+        bloomsCheck++;
         long fun1=hashFun1(key,m);
         long fun2=Math.max(1,hashFun2(key,m));
         for(int i=1;i<=hashingFunctionNumber;i++)
         {
             long index=add(fun1,mul(i,fun2,m),m);
-            if((bloom[(int)(index/8)]&(byte) (1<<(index%8)))==0)
+            if((bloom[(int)(index/8)]&(byte) (1<<(index%8)))==0) {
+                bloomsNegative++;
                 return false;
+            }
         }
         return true;
     }
@@ -304,6 +312,7 @@ public class SSTable {
                 byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
                 if (!bufferRead(byteBuffer, fileChannel1, pos))
                     throw new CorruptionDetected("Nevalidan sst fajl");
+                diskBlockReads++;
                 rateLimiter(byteBuffer.limit(), startTime, writtenSize);
                 fullCapacity = new byte[byteBuffer.capacity()];
                 byteBuffer.get(fullCapacity);
@@ -336,7 +345,7 @@ public class SSTable {
         return (int)sum;
     }
 
-    public void ssTableCompact(Version current,List<TableHandle>list,int start,int finish)
+    public void ssTableCompact(List<TableHandle>list,int start,int finish)
     {
         long startTime=System.currentTimeMillis();
         Index writtenSize=new Index(0);
@@ -858,6 +867,7 @@ public class SSTable {
                         ByteBuffer byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
                         if (!bufferRead(byteBuffer, fileChannel, pos))
                             throw new CorruptionDetected("Nevalidan sst fajl");
+                        diskBlockReads++;
                         fullCapacity = new byte[byteBuffer.capacity()];
                         byteBuffer.get(fullCapacity);
                         if(lruWithSize!=null)
@@ -939,6 +949,7 @@ public class SSTable {
                         byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
                         if (!bufferRead(byteBuffer, fileChannel, pos))
                             throw new CorruptionDetected("Nevalidan sst fajl");
+                        diskBlockReads++;
                         fullCapacity = new byte[byteBuffer.capacity()];
                         byteBuffer.get(fullCapacity);
                         if(lruWithSize!=null)

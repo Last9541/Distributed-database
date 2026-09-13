@@ -31,7 +31,7 @@ public class Compaction {
     protected BlockingDeque<CWElement> compactionQueue=new LinkedBlockingDeque<>();
 
 
-    public boolean group(Version current,int start,int end,List<TableHandle> tableHandles)
+    public boolean group(int start,int end,List<TableHandle> tableHandles)
     {
         boolean proceed=true;
         int i=start;
@@ -45,7 +45,7 @@ public class Compaction {
             }
             if (proceed) {
                 try {
-                    lsmImplementation.ssTableCompact(current,tableHandles, start, end);
+                    lsmImplementation.ssTableCompact(tableHandles, start, end);
                     return true;
                 } catch (InvalidArgument ignored) {
 
@@ -71,7 +71,7 @@ public class Compaction {
                break;
            try
            {
-               group(cwElement.getVersion(),cwElement.getStart(),cwElement.getEnd(),cwElement.getList());
+               group(cwElement.getStart(),cwElement.getEnd(),cwElement.getList());
            }
            finally {
                cwElement.getVersion().decrement();

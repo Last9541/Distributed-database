@@ -95,6 +95,7 @@ public class CompactionIterator implements Comparable<CompactionIterator> {
             byteBuffer = ByteBuffer.allocate((int) (end - indexEntry.getIndex()));
             if (!ssTable.bufferRead(byteBuffer, fileChannel, pos))
                 throw new CorruptionDetected("Nevalidan sst fajl");
+            ssTable.diskBlockReads++;
             writtenSize.setVal(writtenSize.getVal()+byteBuffer.limit());
             if(ssTable.config.getCompactionIoMbPerS()>0) {
                 long cur = System.currentTimeMillis();

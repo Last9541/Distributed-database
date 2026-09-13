@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 public class LruWithSize extends LinkedHashMap<LruSizeKey, byte[]> {
     private long size;
     private final long maxSize;
+    private int hit=0;
+    private int miss=0;
     public LruWithSize(long maxSize) {
         super(16, 0.75f, true);
         this.maxSize=maxSize;
@@ -40,6 +42,15 @@ public class LruWithSize extends LinkedHashMap<LruSizeKey, byte[]> {
 
     @Override
     public synchronized byte[] get(Object key) {
-        return super.get(key);
+        byte[] val=super.get(key);
+        if(val==null)
+            miss++;
+        else
+            hit++;
+        return val;
+    }
+
+    public HitMiss getHitMiss() {
+        return new HitMiss(hit,miss);
     }
 }

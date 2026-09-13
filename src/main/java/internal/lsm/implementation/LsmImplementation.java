@@ -3,6 +3,7 @@ package internal.lsm.implementation;
 import cmd.lsmkv.Main;
 import internal.lsm.*;
 import internal.lsm.errors.*;
+import internal.lsm.implementation.lru.HitMiss;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -415,6 +416,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
         long immutablesBytesTotal = current.getImmutableSize();
         long lastSeqNo = sequence-1;
+        HitMiss hitMiss=lruWithSize.getHitMiss();
         return String.format(
                 "epoch=%d last_seqno=%d%n" +
                         "active_entries=%d active_bytes=%d%n" +
@@ -422,8 +424,7 @@ public class LsmImplementation extends SSTable implements Lsm {
                         "sst_live=%d sst_total_bytes=%d%n" +
                         "block_cache_hits=%d block_cache_misses=%d%n" +
                         "blooms_checked=%d blooms_negative=%d%n" +
-                        "disk_block_reads=%d%n" +
-                        "compaction_backlog_bytes=%d jobs_running=%d",
+                        "disk_block_reads=%d%n",
                 current.getEpoch(),
                 lastSeqNo,
                 activeEntries,
@@ -431,14 +432,12 @@ public class LsmImplementation extends SSTable implements Lsm {
                 immutablesCount,
                 immutablesBytesTotal,
                 current.getImmutables().size(),
-                sstTotalBytes
-//                blockCacheHits,
-//                blockCacheMisses,
-//                bloomsChecked,
-//                bloomsNegative,
-//                diskBlockReads,
-//                compactionBacklogBytes,
-//                jobsRunning
+                sstTotalBytes,
+                hitMiss.getHit(),
+                hitMiss.getMiss(),
+                bloomsCheck,
+                bloomsNegative,
+                diskBlockReads
         );    }
 
     private void channelInit() throws IOException
@@ -819,7 +818,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         Version current=version;
         for(TableHandle x:current.getTableHandles())
         {
-            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+            System.out.printf("id=%d, createdAt=%s, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getCreatedAt(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
         }
     }
 
