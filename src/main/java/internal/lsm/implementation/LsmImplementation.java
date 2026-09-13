@@ -416,7 +416,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         }
         long immutablesBytesTotal = current.getImmutableSize();
         long lastSeqNo = sequence-1;
-        HitMiss hitMiss=lruWithSize.getHitMiss();
+        HitMiss hitMiss=(lruWithSize==null)?new HitMiss(0,0):lruWithSize.getHitMiss();
         return String.format(
                 "epoch=%d last_seqno=%d%n" +
                         "active_entries=%d active_bytes=%d%n" +
@@ -431,14 +431,15 @@ public class LsmImplementation extends SSTable implements Lsm {
                 activeBytes,
                 immutablesCount,
                 immutablesBytesTotal,
-                current.getImmutables().size(),
+                current.getTableHandles().size(),
                 sstTotalBytes,
                 hitMiss.getHit(),
                 hitMiss.getMiss(),
                 bloomsCheck,
                 bloomsNegative,
                 diskBlockReads
-        );    }
+        );
+    }
 
     private void channelInit() throws IOException
     {

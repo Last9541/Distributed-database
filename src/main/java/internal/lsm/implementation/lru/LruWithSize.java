@@ -15,7 +15,7 @@ public class LruWithSize extends LinkedHashMap<LruSizeKey, byte[]> {
     @Override
     public synchronized byte[] put(LruSizeKey key, byte[] value) {
         if(containsKey(key))
-            size-=get(key).length;
+            size-=super.get(key).length;
         byte[] val =super.put(key, value);
         size+=value.length;
         while(!isEmpty() && size>maxSize)
@@ -50,7 +50,7 @@ public class LruWithSize extends LinkedHashMap<LruSizeKey, byte[]> {
         return val;
     }
 
-    public HitMiss getHitMiss() {
+    public synchronized HitMiss getHitMiss() {
         return new HitMiss(hit,miss);
     }
 }
