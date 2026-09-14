@@ -101,6 +101,7 @@ public class Main {
                         catch (RuntimeException e)
                         {
                             exception=e;
+                            continue;
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -190,7 +191,12 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    lsm.close();
+                    try {
+                        lsm.close();
+                    } catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
 //                    ssTableWriter= Executors.newSingleThreadExecutor();
 //                    compactionWorker=Executors.newSingleThreadScheduledExecutor();
 //                    compactionLoop=Executors.newSingleThreadScheduledExecutor();
@@ -204,7 +210,13 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    lsm.flushNow();
+                    try {
+                        lsm.flushNow();
+                    }
+                    catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
                     break;
                 }
                 case "list-sst":
@@ -213,7 +225,13 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    lsm.listSst();
+                    try {
+                        lsm.listSst();
+                    }
+                    catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
                     break;
                 }
                 case "sst-info":
@@ -223,9 +241,17 @@ public class Main {
                         continue;
                     }
                     String filename=arguments.get("filename");
-                    if(filename==null)
-                        exception= new InvalidArgument("Unesi filename");
-                    lsm.sstInfo(arguments.get("filename"));
+                    if(filename==null) {
+                        exception = new InvalidArgument("Unesi filename");
+                        continue;
+                    }
+                    try {
+                        lsm.sstInfo(filename);
+                    }
+                    catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
                     break;
                 }
                 case "manifest-info":
@@ -234,7 +260,13 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    lsm.manifestInfo();
+                    try {
+                        lsm.manifestInfo();
+                    }
+                    catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
                     break;
                 }
                 case "version-info":
@@ -243,7 +275,13 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    lsm.versionInfo();
+                    try {
+                        lsm.versionInfo();
+                    }
+                    catch (RuntimeException e) {
+                        exception=e;
+                        continue;
+                    }
                     break;
                 }
             }
