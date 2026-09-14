@@ -134,8 +134,12 @@ public class SSTable {
         }
         catch (FileSystemException e){
             if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
-                System.out.println("Sync failed:"+ e.getMessage());
+                Global.logger.severe("Sync failed:"+ e.getMessage());
                 throw e;
+            }
+            else
+            {
+                Global.logger.warning("Sync failed" + e.getMessage());
             }
         }
     }
@@ -567,7 +571,9 @@ public class SSTable {
             Files.move(sstTmp, filePath, StandardCopyOption.ATOMIC_MOVE);
         }
         catch (AtomicMoveNotSupportedException e) {
-            Files.move(sstTmp, filePath);
+            Global.logger.severe("ATOMICKI MOVE NIJE PODRZAN");
+            //Files.move(sstTmp, filePath);
+            throw e;
         }
         fsyncDirectory(filePath.getParent());
         TableHandle tableHandle=new TableHandle(id,filename,minKey,maxKey,minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,size,this);
@@ -597,7 +603,9 @@ public class SSTable {
         try {
             Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
-            Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            //Files.move(manifestFileTemp.toPath(), manifestFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            Global.logger.severe("ATOMICKI MOVE NIJE PODRZAN");
+            throw e;
         }
         fsyncDirectory(manifestFile.toPath().getParent());
     }
@@ -741,7 +749,9 @@ public class SSTable {
                 Files.move(sstTmp, filePath, StandardCopyOption.ATOMIC_MOVE);
             }
             catch (AtomicMoveNotSupportedException e) {
-                Files.move(sstTmp, filePath);
+                //Files.move(sstTmp, filePath);
+                Global.logger.severe("ATOMICKI MOVE NIJE PODRZAN");
+                throw e;
             }
             fsyncDirectory(filePath.getParent());
             return new TableHandle(id,filename,memtable.getMemtable().firstKey().getBytes(),memtable.getMemtable().lastKey().getBytes(),minSeqNo,maxSeqNo,Files.readAttributes(filePath, BasicFileAttributes.class).creationTime().toInstant(),Files.size(filePath),config.getBloomFilterSizePerKey(),config.getBloomHashingFunctionNumber(),pos,sparseIndex.size(),pos2,bloomFilter.length,memtable.getMemtable().size(), this);
@@ -875,7 +885,7 @@ public class SSTable {
                 List<IndexEntry> sparseIndex = getEntries(fileChannel, x.getSparseIndexSize(), headerSize, x.getBloomFilterPos(), x.getSparseIndexPos(), pos, "sparseIndex");
                 if (pos.getVal() != x.getBloomFilterPos())
                     throw new CorruptionDetected("Nevalidan sparseIndex");
-                System.out.println("block number"+sparseIndex.size());
+                Global.logger.info("block number"+sparseIndex.size());
                 for(int index=0;index<sparseIndex.size();index++)
                 {
                     byte[] fullCapacity=null;
@@ -900,7 +910,7 @@ public class SSTable {
                         if(lruWithSize!=null)
                             lruWithSize.put(lruSizeKey, fullCapacity);
                     }
-                    System.out.println("Velicina bloka:"+fullCapacity.length);
+                    Global.logger.info("Velicina bloka:"+fullCapacity.length);
                     ByteBuffer byteBuffer=ByteBuffer.wrap(fullCapacity);
                     byte[] checksum=new byte[byteBuffer.capacity()-Integer.BYTES];
                     byteBuffer.get(checksum);
@@ -913,7 +923,7 @@ public class SSTable {
                     if(chs!=byteBuffer.getInt())
                         throw new CorruptionDetected("Nevalidan checksum");
                 }
-                System.out.println("Checksum OK");
+                Global.logger.info("Checksum OK");
 
             }
             finally {
@@ -926,6 +936,7 @@ public class SSTable {
 
     public byte[] ssTableRead(byte[] key,Version current)
     {
+        Global.logger.info("On disk");
         List<TableHandle> list=current.getTableHandles();
         for (TableHandle x : list) {
             try{
@@ -1269,12 +1280,12 @@ public class SSTable {
             try {
                 ssWork(x);
             } catch (IOException e) {
-                System.out.println(e.getMessage());
+                Global.logger.warning(e.getMessage());
                 while (true) {
                     try {
                         immutableQueue.putFirst(iqElement);
                     } catch (InterruptedException ex) {
-                        System.out.println(ex.getMessage());
+                        Global.logger.warning(ex.getMessage());
                         continue;
                     }
                     break;

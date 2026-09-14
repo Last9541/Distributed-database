@@ -87,7 +87,7 @@ public class LsmImplementation extends SSTable implements Lsm {
     private void trunc(FileChannel fileChannel,long start,Path file) throws IOException {
         fileChannel.truncate(start);
         truncated++;
-        System.out.println("truncated_segment="+file.getFileName().toString() + " truncated_to="+start);
+        Global.logger.info("truncated_segment="+file.getFileName().toString() + " truncated_to="+start);
     }
 
 
@@ -719,10 +719,12 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException(ssException);
         //todo proveri da li NotFound staviti unutar synchronized (vise nije synchronized sada je lock i unlock) ili ostaviti van
 
+
         Version current=acquireVersion();
         try{
             MemtableEntry entry = current.getActive().getMemtable().get(new ByteArray(key));
             if (entry != null) {
+                Global.logger.info("In memory");
                 if (entry.isTombstone())
                     throw new NotFound();
                 return entry.getValue();
@@ -732,6 +734,7 @@ public class LsmImplementation extends SSTable implements Lsm {
             for (Memtable memtable : current.getImmutables()) {
                 entry = memtable.getMemtable().get(new ByteArray(key));
                 if (entry != null) {
+                    Global.logger.info("In memory");
                     if (entry.isTombstone())
                         throw new NotFound();
                     return entry.getValue();
@@ -826,9 +829,9 @@ public class LsmImplementation extends SSTable implements Lsm {
             throw new RuntimeException(ssException);
         TableHandle tableHandle = super.flush();
         if (tableHandle == null)
-            System.out.println("Nema immutable");
+            Global.logger.info("Nema immutable");
         else
-            System.out.println(tableHandle.getId() + " " + tableHandle.getFileSize());
+            Global.logger.info(tableHandle.getId() + " " + tableHandle.getFileSize());
 
     }
 
@@ -843,7 +846,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         Version current=version;
         for(TableHandle x:current.getTableHandles())
         {
-            System.out.printf("id=%d, createdAt=%s, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getCreatedAt(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+            System.out.printf("id=%d, createdAt=%s, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getCreatedAt(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),new String(x.getMinKey(),StandardCharsets.UTF_8),new String(x.getMaxKey(),StandardCharsets.UTF_8));
         }
     }
 
@@ -860,7 +863,7 @@ public class LsmImplementation extends SSTable implements Lsm {
         try {
             TableHandle tableHandle = current.getMapTableHandles().get(fileName);
             if (tableHandle == null) {
-                System.out.println("Ne postoji sst sa ovim fileName");
+                Global.logger.info("Ne postoji sst sa ovim fileName");
                 return;
             }
             super.sstInfo(tableHandle);
@@ -881,13 +884,12 @@ public class LsmImplementation extends SSTable implements Lsm {
         List<TableHandle> set=null;
         synchronized (manifest)
         {
-            System.out.println(manifest.getEpoch());
+            Global.logger.info(String.valueOf(manifest.getEpoch()));
             set=manifest.getSet();
         }
         for(TableHandle x:set)
         {
-            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
-
+            Global.logger.info(String.format("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),new String(x.getMinKey(),StandardCharsets.UTF_8),new String(x.getMaxKey(),StandardCharsets.UTF_8)));
         }
     }
 
@@ -900,14 +902,14 @@ public class LsmImplementation extends SSTable implements Lsm {
         if(ssException!=null)
             throw new RuntimeException(ssException);
         Version current=version;
-        System.out.println("epoch: "+current.getEpoch());
+        Global.logger.info("epoch: "+current.getEpoch());
         for(Memtable x:current.getImmutables())
         {
-            System.out.println("size: "+x.getSize());
+            Global.logger.info("size: "+x.getSize());
         }
         for(TableHandle x:current.getTableHandles())
         {
-            System.out.printf("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),Arrays.toString(x.getMinKey()),Arrays.toString(x.getMaxKey()));
+            Global.logger.info(String.format("id=%d, fileSize=%d, minsSeqNo=%d, maxSeqNo=%d, minKey=%s, maxKey=%s%n",x.getId(),x.getFileSize(),x.getMinSeqNo(),x.getMaxSeqNo(),new String(x.getMinKey(),StandardCharsets.UTF_8),new String(x.getMaxKey(),StandardCharsets.UTF_8)));
         }
 
     }

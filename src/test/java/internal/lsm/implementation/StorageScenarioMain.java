@@ -1,5 +1,6 @@
 package internal.lsm.implementation;
 
+import cmd.lsmkv.Main;
 import internal.lsm.Config;
 import internal.lsm.errors.InvalidArgument;
 import internal.lsm.errors.NotFound;
@@ -35,6 +36,7 @@ final class StorageScenarioMain {
             case "sstable-overwrite-read" -> sstableOverwriteRead(dataDir);
             case "sstable-tombstone-write" -> sstableTombstoneWrite(dataDir);
             case "sstable-tombstone-read" -> sstableTombstoneRead(dataDir);
+            case "compaction-write" -> compactionWrite(dataDir);
             case "oversized-inputs" -> oversizedInputs(dataDir);
             default -> throw new IllegalArgumentException("Unknown scenario: " + args[0]);
         }
@@ -197,6 +199,26 @@ final class StorageScenarioMain {
         }
     }
 
+    private static void compactionWrite(Path dataDir) throws IOException {
+        LsmImplementation store = new LsmImplementation();
+        Main.compaction = new Compaction(store);
+        store.init(compactionConfig(dataDir));
+
+        try {
+            for (int i = 0; i < 16; i++) {
+                store.put(bytes("k" + i), bytes("v" + i));
+            }
+            for (int i = 0; i < 16; i++) {
+                checkArray(bytes("v" + i), store.get(bytes("k" + i)), "value missing before close k" + i);
+            }
+        } finally {
+            store.close();
+        }
+
+        String manifest = Files.readString(dataDir.resolve("manifest.json"), StandardCharsets.UTF_8);
+        check(manifest.contains("\"level\" : 1"), "compaction did not publish a level-1 SSTable:" + System.lineSeparator() + manifest);
+    }
+
     private static Config testConfig(Path dataDir) {
         Config config = new Config();
         config.setDataDir(dataDir.toString());
@@ -216,6 +238,10 @@ final class StorageScenarioMain {
         config.setMemtableMaxBytes(90);
         config.setRollSize(8192);
         return config;
+    }
+
+    private static Config compactionConfig(Path dataDir) {
+        return flushConfig(dataDir);
     }
 
     private static Config rollConfig(Path dataDir) {

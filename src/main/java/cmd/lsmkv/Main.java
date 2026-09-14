@@ -22,6 +22,7 @@ import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.logging.Level;
 
 public class Main {
 
@@ -57,13 +58,13 @@ public class Main {
     public static void main(String[] args) {
         Scanner scanner=new Scanner(System.in);
 
-        System.out.println(System.getProperty("user.dir"));
+        //System.out.println(System.getProperty("user.dir"));
         Map<String,String> arguments=new HashMap<>();
         boolean flag=true;
         while(flag) {
             arguments.clear();
             if(exception!=null) {
-                System.out.println(exception.getMessage());
+                Global.logger.log(Level.SEVERE, exception.toString(), exception);
             }
             args=Parser.parse(scanner.nextLine().toCharArray());
             if (args.length == 0)
@@ -81,16 +82,18 @@ public class Main {
                         Config config=null;
                         if (arguments.containsKey("config"))
                         {
-                            System.out.println("Config loaded: " + arguments.get("config"));
+                            Global.logger.info("Config loaded: " + arguments.get("config"));
                             config=mapper.readValue(Path.of(arguments.get("config")).toFile(), Config.class);
                         }
                         else {
-                            System.out.println("Default init");
                             Path path = Path.of("config/default.json");
-                            if(Files.notExists(path))
-                                config=instance;
-                            else
-                                config=mapper.readValue(path.toFile(), Config.class);
+                            if (Files.notExists(path)) {
+                                config = instance;
+                                Global.logger.info("Init without any config file");
+                            } else {
+                                config = mapper.readValue(path.toFile(), Config.class);
+                                Global.logger.info("Default init");
+                            }
                         }
                         try {
                             lsm.init(config);
@@ -138,7 +141,7 @@ public class Main {
                         //lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8));
                         try
                         {
-                            System.out.println(Arrays.toString(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8))));
+                            Global.logger.info(new String(lsm.get(arguments.get("key").getBytes(StandardCharsets.UTF_8)),StandardCharsets.UTF_8));
                         }
                         catch (RuntimeException e)
                         {
@@ -178,7 +181,7 @@ public class Main {
                         exception = new RuntimeException("Moras da pozoves init");
                         continue;
                     }
-                    System.out.println(lsm.stats());
+                    Global.logger.info(lsm.stats());
                     break;
                 }
                 //todo proveri da li close radi lepo

@@ -108,6 +108,12 @@ class LsmImplementationTest {
         runScenario("sstable-tombstone-read", dataDir);
     }
 
+    @Test
+    @Order(10)
+    void compactionPublishesReplacementSstable(@TempDir Path dataDir) {
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> runScenario("compaction-write", dataDir));
+    }
+
     private static void runScenario(String scenario, Path dataDir) throws IOException {
         Process process = new ProcessBuilder(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
